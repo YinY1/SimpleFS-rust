@@ -1,17 +1,15 @@
+use simple_fs::SampleFileSystem;
+
+mod bitmap;
+mod block;
 mod inode;
 mod simple_fs;
+mod super_block;
 
-use simple_fs::SuperBlock;
-
+#[macro_use]
+extern crate lazy_static;
 fn main() {
     env_logger::init();
-    simple_fs::init();
-
-    sp_test();
-}
-
-#[allow(unused)]
-fn sp_test() {
-    let sp = SuperBlock::read().unwrap();
-    println!("{:?}", sp);
+    let fs = SampleFileSystem::init();
+    fs.info();
 }

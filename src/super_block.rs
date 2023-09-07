@@ -38,7 +38,7 @@ impl SuperBlock {
     /// 初始化超级块
     pub fn new() -> Self {
         trace!("init super block");
-        Self {
+        let sb = Self {
             fs_size: FS_SIZE / BLOCK_SIZE,
             first_inode: INODE_BLOCK,
             inode_area_size: INODE_NUM,
@@ -49,12 +49,14 @@ impl SuperBlock {
             first_block_of_data_bitmap: DATA_BITMAP_BLOCK,
             data_bitmap_size: DATA_BITMAP_NUM,
             magic: MAGIC,
-        }
+        };
+        sb.cache();
+        sb
     }
 
-    pub fn write(&self) {
+    pub fn cache(&self) {
         trace!("write super block to cache");
-        write_block(self, 0, 0, BLOCK_SIZE);
+        write_block(self, 0, 0);
     }
 
     pub fn read() -> Option<Self> {

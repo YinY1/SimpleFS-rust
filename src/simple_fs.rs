@@ -1,11 +1,12 @@
 #[allow(unused)]
 use log::{debug, error, info, trace};
+use spin::Mutex;
 use std::{fs::File, io::Write};
 
 use crate::{
-    bitmap::{alloc_bit, count_data_blocks, count_inodes, BitmapType},
-    block::{cache_msg, sync_all_block_cache, write_block, Block},
-    inode::{DirEntry, FileMode, Inode, InodeType},
+    bitmap::{count_data_blocks, count_inodes},
+    block::sync_all_block_cache,
+    inode::Inode,
     super_block::SuperBlock,
 };
 
@@ -21,6 +22,9 @@ pub const INODE_BITMAP_NUM: usize = 1;
 pub const DATA_BITMAP_NUM: usize = 13;
 // inode 区块数
 pub const INODE_NUM: usize = 1024;
+// data 区块数 (<= bitmap bit数,因为系统限制，bitmap有冗余)
+pub const DATA_NUM: usize =
+    FS_SIZE / BLOCK_SIZE - INODE_NUM - DATA_BITMAP_NUM - INODE_BITMAP_NUM - 1;
 // inode bitmap起始块号
 pub const INODE_BITMAP_BLOCK: usize = INODE_BITMAP_NUM;
 // data bitmap起始块号
@@ -34,20 +38,23 @@ pub const DATA_BLOCK: usize = INODE_BLOCK + INODE_NUM;
 pub struct SampleFileSystem {
     pub root_inode: Inode,
     pub super_block: SuperBlock,
+    pub current_inode: Inode,
 }
 
 impl SampleFileSystem {
+    /// 从文件系统中读出相关信息
     pub fn read() -> Option<Self> {
         trace!("read SFS");
+        let root_inode = Inode::read(0)?;
         Some(Self {
-            root_inode: Inode::read(0)?,
+            current_inode: root_inode.clone(),
+            root_inode,
             super_block: SuperBlock::read()?,
         })
     }
     ///初始化SFS
     pub fn init() -> Self {
         if let Some(sp) = SuperBlock::read() {
-            trace!("Read sp info:\n {:?}", sp);
             if sp.valid() {
                 trace!("no need to init fs");
                 return Self::read().unwrap();
@@ -65,16 +72,13 @@ impl SampleFileSystem {
 
         // 创建超级块
         let super_block = SuperBlock::new();
-        super_block.write();
 
         // 创建root_inode
-        let inode_id = alloc_bit(BitmapType::Inode).expect("Error in Allocing root id");
-        assert_eq!(0, inode_id);
-        let root_inode = Inode::new(InodeType::Diretory, inode_id, FileMode::RDWR);
-        root_inode.write();
+        let root_inode = Inode::new_root();
 
         sync_all_block_cache();
         Self {
+            current_inode: root_inode.clone(),
             root_inode,
             super_block,
         }
@@ -84,7 +88,14 @@ impl SampleFileSystem {
         println!("-----------------------");
         println!("{:?}", self.super_block);
         println!("{:?}", self.root_inode);
-        println!("[file counts] {}", count_inodes());
-        println!("[Disk used]   {}", count_data_blocks() * BLOCK_SIZE);
+        let (alloced, _) = count_inodes();
+        println!("[file counts] {}", alloced);
+        let (alloced, valid) = count_data_blocks();
+        println!("[Disk used ]  {}", alloced * BLOCK_SIZE,);
+        println!("[Disk valid]  {}", valid * BLOCK_SIZE)
     }
+}
+
+lazy_static! {
+    pub static ref SFS: Mutex<SampleFileSystem> = Mutex::new(SampleFileSystem::init());
 }

@@ -1,16 +1,31 @@
 use log::{error, info, trace};
+use serde::Serialize;
 use spin::Mutex;
 use std::{
     collections::VecDeque,
     fs::{File, OpenOptions},
     io::ErrorKind,
+    mem::size_of,
     os::unix::prelude::FileExt,
 };
 
-use crate::simple_fs::{BLOCK_SIZE, FS_FILE_NAME};
+use crate::{
+    bitmap::alloc_bit,
+    simple_fs::{BLOCK_SIZE, FS_FILE_NAME},
+};
 
 const BLOCK_CACHE_LIMIT: usize = 1024; // 块缓冲区大小（块数量）
 
+pub const DIRECT_BLOCK_NUM: usize = 8; // 直接块数
+pub const FIRST_INDIRECT_NUM: usize = 1; // 一级间接块数
+pub const SECOND_INDIRECT_NUM: usize = 1; // 二级间接块数
+pub const ADDR_TOTAL_SIZE: usize = DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM + SECOND_INDIRECT_NUM;
+
+pub const BLOCK_ADDR_SIZE: usize = size_of::<u32>(); // 块地址大小
+pub const INDIRECT_ADDR_NUM: usize = BLOCK_SIZE / BLOCK_ADDR_SIZE; // 间接块可以存下的块地址的数量pub
+
+pub const FISRT_MAX: usize = FIRST_INDIRECT_NUM * INDIRECT_ADDR_NUM; //一级间接块最大可表示的块数量
+pub const SECOND_MAX: usize = (SECOND_INDIRECT_NUM * INDIRECT_ADDR_NUM) * FISRT_MAX; //二级间接块最大可表示的块数量
 #[derive(Clone, Debug)]
 pub struct Block {
     pub block_id: usize,
@@ -127,6 +142,144 @@ pub fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte:
         }
     }
     error!("unreachable write_block");
+}
+
+/// 将一个object附加到该inode所拥有的最后一个块的末尾，如果达到上限返回None
+pub fn append_block<T: Serialize>(object: &T, block_addrs: &mut [u32]) -> Option<()> {
+    // 搜索所有直接块
+    for i in 0..DIRECT_BLOCK_NUM {
+        let direct_id = block_addrs[i] as usize;
+        if direct_id == 0 {
+            //该直接块还未申请,直接申请一个新块写在开头
+            let new_block = alloc_bit(crate::bitmap::BitmapType::Data)?;
+            block_addrs[i] = new_block;
+            write_block(object, new_block as usize, 0);
+            return Some(());
+        } else if search_direct_block(direct_id, object).is_some() {
+            //已经写入了
+            return Some(());
+        }
+    }
+
+    // 搜索一级块
+    let first_id = block_addrs[DIRECT_BLOCK_NUM] as usize;
+    if search_first_indirect_block(first_id, object).is_some() {
+        return Some(());
+    };
+
+    // 搜索二级块
+    let second_id = block_addrs[FIRST_INDIRECT_NUM] as usize;
+    // 获取每一个一级地址
+    let size = BLOCK_ADDR_SIZE;
+    for i in 0..BLOCK_SIZE / size {
+        let mut start = i * size;
+        let mut end = start + size;
+        // 直接找二级块最后一个非空一级块的地址
+        let buffer = get_block_buffer(second_id, start, end)?;
+        let mut empty = true;
+        if !empty && i != BLOCK_SIZE / size - 1 {
+            // 非空且不是最后一块，继续找
+            continue;
+        }
+        if i != BLOCK_SIZE / size - 1 {
+            // 不是最后一块，则要寻找该空块的上一块
+            start -= size;
+            end -= size
+        }
+        // 获取最后非空块的地址
+        let first_buffer = get_block_buffer(second_id, start, end)?;
+        let first_id: u32 = bincode::deserialize(&first_buffer).ok()?;
+        // 搜索该一级块
+        if search_first_indirect_block(first_id as usize, object).is_some() {
+            return Some(());
+        }
+        //如果最后非空块是二级块的最后一个地址，说明二级块全满了，达到上限
+        if i == BLOCK_SIZE / size - 1 {
+            return None;
+        }
+        // 最后非空块填满了，申请一块新的一级块
+        let new_first_block = alloc_bit(crate::bitmap::BitmapType::Data)?;
+        // 再为新一级块申请一块直接块
+        let new_block = alloc_bit(crate::bitmap::BitmapType::Data)?;
+        // 将object写入该直接块
+        write_block(object, new_block as usize, 0);
+        // 将新地址写在新一级块开头
+        write_block(&new_block, new_first_block as usize, 0);
+        //将新一级地址附加在二级块后面
+        write_block(&new_first_block, second_id, start + size);
+    }
+    Some(())
+}
+
+fn search_first_indirect_block<T: Serialize>(first_id: usize, object: &T) -> Option<()> {
+    let size = BLOCK_ADDR_SIZE;
+    for i in 0..BLOCK_SIZE / size {
+        let mut start = i * size;
+        let mut end = start + size;
+        // 直接找一级块最后一个非空直接块的地址
+        let buffer = get_block_buffer(first_id, start, end)?;
+        let mut empty = true;
+        for b in &buffer {
+            if *b != 0 {
+                empty = false;
+                break;
+            }
+        }
+        if !empty && i != BLOCK_SIZE / size - 1 {
+            // 非空且不是最后一块，继续找
+            continue;
+        }
+        if i != BLOCK_SIZE / size - 1 {
+            // 不是最后一块，则要寻找该空块的上一块
+            start -= size;
+            end -= size
+        }
+        // 获取最后非空块的地址
+        let direct_buffer = get_block_buffer(first_id, start, end)?;
+        let direct_id: u32 = bincode::deserialize(&direct_buffer).ok()?;
+        // 搜索该直接块
+        if search_direct_block(direct_id as usize, object).is_some() {
+            return Some(());
+        }
+        //如果最后非空块是一级块的最后一个地址，说明一级块全满了，继续找二级块
+        if i == BLOCK_SIZE / size - 1 {
+            return None;
+        }
+        // 最后非空块填满了，申请一块新的
+        let new_block = alloc_bit(crate::bitmap::BitmapType::Data)?;
+        // 将object写入该直接块
+        write_block(object, new_block as usize, 0);
+        // 将新地址附加在一级块的内容后面
+        write_block(&new_block, first_id, start + size);
+    }
+    Some(())
+}
+
+fn search_direct_block<T: Serialize>(direct_id: usize, object: &T) -> Option<()> {
+    let size = size_of::<T>();
+    let mut start;
+    let mut end;
+    // 搜索该块的每一个object
+    for i in 0..BLOCK_SIZE / size {
+        start = i * size;
+        end = start + size;
+        // 获得object大小的buffer
+        let buffer = get_block_buffer(direct_id, start, end)?;
+        let mut empty = true;
+        for b in &buffer {
+            if *b != 0 {
+                empty = false;
+                break;
+            }
+        }
+        // 如果直接块可以append，直接写入
+        if empty {
+            write_block(object, direct_id, start);
+            return Some(());
+        }
+    }
+    // block 全满
+    None
 }
 
 lazy_static! {

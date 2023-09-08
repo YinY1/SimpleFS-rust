@@ -7,27 +7,16 @@ use std::{cmp::min, mem::size_of, time::SystemTime};
 
 use crate::{
     bitmap::{self, alloc_bit},
-    block::{get_block_buffer, write_block},
+    block::{
+        get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM,
+        FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
+    },
+    dirent::DirEntry,
     simple_fs::{BLOCK_SIZE, DATA_BLOCK, INODE_BLOCK},
 };
 
 pub const INODE_SIZE: usize = size_of::<Inode>();
 pub const DIRENTRY_SIZE: usize = size_of::<DirEntry>();
-
-// 文件名和扩展名长度限制（字节）
-const NAME_LENGTH_LIMIT: usize = 10;
-const EXTENSION_LENGTH_LIMIT: usize = 3;
-
-const DIRECT_BLOCK_NUM: usize = 8; // 直接块数
-const FIRST_INDIRECT_NUM: usize = 1; // 一级间接块数
-const SECOND_INDIRECT_NUM: usize = 1; // 二级间接块数
-const ADDR_TOTAL_SIZE: usize = DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM + SECOND_INDIRECT_NUM;
-
-const BLOCK_ADDR_SIZE: usize = size_of::<u32>(); // 块地址大小
-const INDIRECT_ADDR_NUM: usize = BLOCK_SIZE / BLOCK_ADDR_SIZE; // 间接块可以存下的块地址的数量
-
-const FISRT_MAX: usize = FIRST_INDIRECT_NUM * INDIRECT_ADDR_NUM; //一级间接块最大可表示的块数量
-const SECOND_MAX: usize = (SECOND_INDIRECT_NUM * INDIRECT_ADDR_NUM) * FISRT_MAX; //二级间接块最大可表示的块数量
 
 pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX); //可表示文件的最大大小（字节）
 
@@ -43,7 +32,7 @@ pub struct Inode {
     size: u32,
     time_info: u64,
     // 8个直接，1个一级，一个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【地址】
-    addr: [u32; ADDR_TOTAL_SIZE],
+    pub addr: [u32; ADDR_TOTAL_SIZE],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -88,7 +77,7 @@ impl Inode {
         root.alloc_data_blocks();
         assert_eq!(DATA_BLOCK, root.addr[0] as usize);
 
-        let current_dirent = DirEntry::new(".", "", &mut root).unwrap();
+        let current_dirent = DirEntry::create_dot(&mut root);
         write_block(&current_dirent, root.addr[0] as usize, 0);
         root.cache();
         root
@@ -121,9 +110,16 @@ impl Inode {
             let dirs = DirEntry::create_diretory(&mut inode, parent_inode);
             write_block(&dirs, inode.addr[0] as usize, 0);
         }
+        // 写入缓存块
+        inode.cache();
         Some(inode)
     }
 
+    pub fn alloc_dir(parent_inode: &mut Inode) -> Option<Self> {
+        Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0)
+    }
+
+    /// 一次性为inode申请inode.size大小的block
     fn alloc_data_blocks(&mut self) -> Option<()> {
         let block_nums = self.size as usize / BLOCK_SIZE + 1;
         if block_nums > bitmap::count_valid_data_blocks() {
@@ -215,7 +211,6 @@ impl Inode {
         let start_byte = inode_pos * INODE_SIZE;
         let end_byte = start_byte + INODE_SIZE;
 
-        // TODO 读大文件时ｂｌｏｃｋ不止一个
         // 一个Inode 64B
         let buffer = get_block_buffer(block_id, start_byte, end_byte)?;
         bincode::deserialize(&buffer).ok()
@@ -269,72 +264,6 @@ impl Inode {
             for dir in &dirs {
                 println!("{}", dir.get_filename());
             }
-        }
-    }
-}
-
-#[allow(unused)]
-#[derive(Serialize, Deserialize, Debug)]
-pub struct DirEntry {
-    filename: [u8; NAME_LENGTH_LIMIT],       //文件名：10B
-    extension: [u8; EXTENSION_LENGTH_LIMIT], //扩展名: 3B
-    inode_id: u16,                           //inode号: 2B
-}
-
-#[allow(unused)]
-impl DirEntry {
-    pub fn new_empty() -> Self {
-        Self {
-            filename: [0; NAME_LENGTH_LIMIT],
-            extension: [0; EXTENSION_LENGTH_LIMIT],
-            inode_id: 0,
-        }
-    }
-
-    pub fn new(filename: &str, extension: &str, inode: &mut Inode) -> Option<Self> {
-        if filename.len() > NAME_LENGTH_LIMIT {
-            error!("filename TOO LONG");
-            None
-        } else if extension.len() > EXTENSION_LENGTH_LIMIT {
-            error!("extension TOO LONG");
-            None
-        } else {
-            let mut filename_ = [0; NAME_LENGTH_LIMIT];
-            filename_[..filename.len()].copy_from_slice(filename.as_bytes());
-            let mut extension_ = [0; EXTENSION_LENGTH_LIMIT];
-            extension_[..extension.len()].copy_from_slice(extension.as_bytes());
-
-            // 增加一个nlink
-            inode.linkat();
-            Some(Self {
-                filename: filename_,
-                extension: extension_,
-                inode_id: inode.inode_id,
-            })
-        }
-    }
-
-    pub fn create_diretory(current_inode: &mut Inode, parent_inode: &mut Inode) -> [Self; 2] {
-        let current_dirent = Self::new(".", "", current_inode).unwrap();
-        let parent_dirent = Self::new("..", "", parent_inode).unwrap();
-        [current_dirent, parent_dirent]
-    }
-
-    pub fn get_filename(&self) -> String {
-        let name = String::from_utf8_lossy(&self.filename)
-            .split('\0')
-            .next()
-            .unwrap()
-            .to_string();
-        let ext = String::from_utf8_lossy(&self.extension)
-            .split('\0')
-            .next()
-            .unwrap()
-            .to_string();
-        if !ext.is_empty() {
-            name + "." + &ext
-        } else {
-            name
         }
     }
 }

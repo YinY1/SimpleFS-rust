@@ -177,6 +177,12 @@ pub fn append_block<T: Serialize>(object: &T, block_addrs: &mut [u32]) -> Option
         // 直接找二级块最后一个非空一级块的地址
         let buffer = get_block_buffer(second_id, start, end)?;
         let mut empty = true;
+        for b in &buffer {
+            if *b != 0 {
+                empty = false;
+                break;
+            }
+        }
         if !empty && i != BLOCK_SIZE / size - 1 {
             // 非空且不是最后一块，继续找
             continue;
@@ -280,6 +286,81 @@ fn search_direct_block<T: Serialize>(direct_id: usize, object: &T) -> Option<()>
     }
     // block 全满
     None
+}
+
+fn get_direct_block(id: u32) -> Option<Vec<u8>> {
+    get_block_buffer(id as usize, 0, BLOCK_SIZE)
+}
+
+fn get_first_blocks(first_id: u32) -> Option<Vec<(u32, Vec<u8>)>> {
+    let mut v = Vec::new();
+    for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+        let start = i * BLOCK_ADDR_SIZE;
+        let end = start + BLOCK_ADDR_SIZE;
+        let addr_buff = get_block_buffer(first_id as usize, start, end)?;
+        let direct_id: u32 = bincode::deserialize(&addr_buff).ok()?;
+        let buffer = get_direct_block(direct_id)?;
+        v.push((direct_id, buffer));
+    }
+    Some(v)
+}
+
+fn get_second_blocks(second_id: u32) -> Option<Vec<(u32, Vec<u8>)>> {
+    let mut v = Vec::new();
+    for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+        let start = i * BLOCK_ADDR_SIZE;
+        let end = start + BLOCK_ADDR_SIZE;
+        let addr_buff = get_block_buffer(second_id as usize, start, end)?;
+        let first_id: u32 = bincode::deserialize(&addr_buff).ok()?;
+        let mut buffers = get_first_blocks(first_id)?;
+        v.append(&mut buffers);
+    }
+    Some(v)
+}
+
+pub fn get_all_blocks(block_addrs: &[u32]) -> Option<Vec<(u32, Vec<u8>)>> {
+    let mut v = Vec::new();
+    // 直接块
+    for i in 0..DIRECT_BLOCK_NUM {
+        let id = block_addrs[i];
+        if id == 0 {
+            return Some(v);
+        }
+        let buffer = get_direct_block(id)?;
+        v.push((id, buffer));
+    }
+
+    // 一级
+    let first_id = block_addrs[DIRECT_BLOCK_NUM];
+    if first_id == 0 {
+        return Some(v);
+    }
+    v.append(&mut get_first_blocks(first_id)?);
+
+    // 二级
+    let second_id = block_addrs[FIRST_INDIRECT_NUM];
+    if second_id == 0 {
+        return Some(v);
+    }
+    v.append(&mut get_second_blocks(second_id)?);
+
+    Some(v)
+}
+
+pub fn get_all_valid_blocks(block_addrs: &[u32]) -> Option<Vec<(u32, Vec<u8>)>> {
+    let mut v = get_all_blocks(block_addrs)?;
+    // 保留非空block
+    v.retain(|(_, block)| !is_empty(block));
+    Some(v)
+}
+
+pub fn is_empty(block: &[u8]) -> bool {
+    for b in block {
+        if *b != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 lazy_static! {

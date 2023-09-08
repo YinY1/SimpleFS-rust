@@ -35,6 +35,7 @@ pub const INODE_BLOCK: usize = DATA_BITMAP_BLOCK + DATA_BITMAP_NUM;
 pub const DATA_BLOCK: usize = INODE_BLOCK + INODE_NUM;
 
 #[allow(unused)]
+#[derive(Default)]
 pub struct SampleFileSystem {
     pub root_inode: Inode,
     pub super_block: SuperBlock,
@@ -60,7 +61,22 @@ impl SampleFileSystem {
                 return Self::read().unwrap();
             }
         }
+        let mut sfs = Self::default();
+        Self::force_clear(&mut sfs);
+        sfs
+    }
 
+    pub fn info(&self) {
+        println!("-----------------------");
+        println!("{:?}", self.super_block);
+        println!("{:?}", self.root_inode);
+        let (alloced, _) = count_inodes();
+        println!("[file counts] {}", alloced);
+        let (alloced, valid) = count_data_blocks();
+        println!("[Disk used ]  {}", alloced * BLOCK_SIZE,);
+        println!("[Disk valid]  {}", valid * BLOCK_SIZE)
+    }
+    pub fn force_clear(&mut self) {
         info!("init fs");
         // 创建100MB空文件
         let mut fs_file = File::create(FS_FILE_NAME).expect("cannot create fs file");
@@ -77,22 +93,11 @@ impl SampleFileSystem {
         let root_inode = Inode::new_root();
 
         sync_all_block_cache();
-        Self {
+        *self = Self {
             current_inode: root_inode.clone(),
             root_inode,
             super_block,
-        }
-    }
-
-    pub fn info(&self) {
-        println!("-----------------------");
-        println!("{:?}", self.super_block);
-        println!("{:?}", self.root_inode);
-        let (alloced, _) = count_inodes();
-        println!("[file counts] {}", alloced);
-        let (alloced, valid) = count_data_blocks();
-        println!("[Disk used ]  {}", alloced * BLOCK_SIZE,);
-        println!("[Disk valid]  {}", valid * BLOCK_SIZE)
+        };
     }
 }
 

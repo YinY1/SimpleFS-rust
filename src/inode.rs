@@ -8,8 +8,8 @@ use std::{cmp::min, mem::size_of, time::SystemTime};
 use crate::{
     bitmap::{self, alloc_bit},
     block::{
-        get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM,
-        FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
+        get_all_valid_blocks, get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM,
+        FIRST_INDIRECT_NUM, FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
     },
     dirent::DirEntry,
     simple_fs::{BLOCK_SIZE, DATA_BLOCK, INODE_BLOCK},
@@ -20,7 +20,7 @@ pub const DIRENTRY_SIZE: usize = size_of::<DirEntry>();
 
 pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX); //可表示文件的最大大小（字节）
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Inode {
     // 内存要对齐！
     inode_type: InodeType,
@@ -42,8 +42,14 @@ pub enum InodeType {
     Diretory,
 }
 
+impl Default for InodeType {
+    fn default() -> Self {
+        Self::Diretory
+    }
+}
+
 bitflags! {
-    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq,Clone)]
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq,Clone,Default)]
     #[serde(transparent)]
     pub struct FileMode:u8{
          /// 只读
@@ -243,11 +249,10 @@ impl Inode {
     /// 展示目录信息
     pub fn ls(&self) {
         assert!(self.is_dir());
-        for block_id in &self.addr {
+        for (block_id, _) in &get_all_valid_blocks(&self.addr).unwrap() {
             if *block_id == 0 {
                 break;
             }
-            //TODO 不止一个block的可能性
             println!("\n---------");
             let mut dirs = Vec::new();
             for i in 0..BLOCK_SIZE / DIRENTRY_SIZE {

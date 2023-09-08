@@ -1,5 +1,6 @@
 use crate::{simple_fs::SFS, dirent, block::sync_all_block_cache};
 
+/// 打印
 pub fn info() {
     SFS.lock().info();
 }

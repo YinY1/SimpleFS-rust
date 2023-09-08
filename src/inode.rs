@@ -8,8 +8,8 @@ use std::{cmp::min, mem::size_of, time::SystemTime};
 use crate::{
     bitmap::{self, alloc_bit},
     block::{
-        get_all_valid_blocks, get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM,
-        FIRST_INDIRECT_NUM, FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
+        get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM,
+        FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
     },
     dirent::DirEntry,
     simple_fs::{BLOCK_SIZE, DATA_BLOCK, INODE_BLOCK},
@@ -18,6 +18,7 @@ use crate::{
 pub const INODE_SIZE: usize = size_of::<Inode>();
 pub const DIRENTRY_SIZE: usize = size_of::<DirEntry>();
 
+#[allow(unused)]
 pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX); //可表示文件的最大大小（字节）
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -249,27 +250,10 @@ impl Inode {
     /// 展示目录信息
     pub fn ls(&self) {
         assert!(self.is_dir());
-        for (block_id, _) in &get_all_valid_blocks(&self.addr).unwrap() {
-            if *block_id == 0 {
-                break;
-            }
-            println!("\n---------");
-            let mut dirs = Vec::new();
-            for i in 0..BLOCK_SIZE / DIRENTRY_SIZE {
-                let start = i * DIRENTRY_SIZE;
-                let end = start + DIRENTRY_SIZE;
-                let buffer = get_block_buffer(*block_id as usize, start, end).unwrap();
-                // 名字第一个字节为空 说明不是dirent
-                if buffer[0] == 0 {
-                    break;
-                }
-                let dir: DirEntry = bincode::deserialize(&buffer).unwrap();
-                dirs.push(dir);
-            }
-            for dir in &dirs {
-                println!("{}", dir.get_filename());
-            }
-        }
+        DirEntry::get_all_dirent(&self.addr)
+            .unwrap()
+            .iter()
+            .for_each(|(_, dir)| println!("{}", dir.get_filename()));
     }
 }
 

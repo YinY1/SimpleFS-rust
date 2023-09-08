@@ -44,21 +44,23 @@ pub struct SampleFileSystem {
 
 impl SampleFileSystem {
     /// 从文件系统中读出相关信息
-    pub fn read() -> Option<Self> {
+    pub fn read(&mut self) {
         trace!("read SFS");
-        let root_inode = Inode::read(0)?;
-        Some(Self {
+        let root_inode = Inode::read(0).unwrap();
+        *self = Self {
             current_inode: root_inode.clone(),
             root_inode,
-            super_block: SuperBlock::read()?,
-        })
+            super_block: SuperBlock::read().unwrap(),
+        };
     }
     ///初始化SFS
     pub fn init() -> Self {
         if let Some(sp) = SuperBlock::read() {
             if sp.valid() {
                 trace!("no need to init fs");
-                return Self::read().unwrap();
+                let mut s = Self::default();
+                s.read();
+                return s;
             }
         }
         let mut sfs = Self::default();
@@ -66,6 +68,7 @@ impl SampleFileSystem {
         sfs
     }
 
+    /// 打印文件系统的信息
     pub fn info(&self) {
         println!("-----------------------");
         println!("{:?}", self.super_block);
@@ -76,6 +79,8 @@ impl SampleFileSystem {
         println!("[Disk used ]  {}", alloced * BLOCK_SIZE,);
         println!("[Disk valid]  {}", valid * BLOCK_SIZE)
     }
+
+    /// 强制覆盖一份新的FS文件，可以看作是格式化
     pub fn force_clear(&mut self) {
         info!("init fs");
         // 创建100MB空文件

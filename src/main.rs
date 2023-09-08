@@ -15,7 +15,7 @@ fn main() {
     env_logger::init();
     syscall::info();
     syscall::ls();
-    //mkdir_test();
+    mkdir_test();
 }
 
 #[allow(unused)]

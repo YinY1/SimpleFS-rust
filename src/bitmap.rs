@@ -5,7 +5,8 @@ use crate::{
     simple_fs::*,
 };
 
-/// 获取一个空闲bit的位置，如果有，则bit置1并返回位置(即返回一个id，inode id或块id)
+/// 获取一个空闲bit的位置，如果有，则bit置1并返回位置
+/// 这个位置是从当前所属位图开始计算，即当前所属位图的第K个bit
 pub fn alloc_bit(bitmap_type: BitmapType) -> Option<u32> {
     let (block_nums, block_start_id) = match bitmap_type {
         BitmapType::Inode => (INODE_BITMAP_NUM, INODE_BITMAP_BLOCK),
@@ -14,7 +15,7 @@ pub fn alloc_bit(bitmap_type: BitmapType) -> Option<u32> {
 
     // 遍历位图的每个块
     for n in 0..block_nums {
-        // 计算当前所在的块的id
+        // 计算当前所在的块的id（起始id是super的0）
         let block_id = block_start_id + n;
         read_block_to_cache(block_id);
 
@@ -54,24 +55,40 @@ pub fn alloc_bit(bitmap_type: BitmapType) -> Option<u32> {
     None
 }
 
-pub fn dealloc_bit(bitmap_type: BitmapType, id: usize) -> bool {
-    let block_start_id = match bitmap_type {
-        BitmapType::Inode => INODE_BITMAP_BLOCK,
-        BitmapType::Data => DATA_BITMAP_BLOCK,
-    };
+pub fn dealloc_inode_bit(inode_id: usize) -> bool {
+    dealloc_bit(INODE_BITMAP_BLOCK, inode_id / 8, inode_id)
+}
 
-    let byte_pos = id / 8;
-    let bit_pos = id % 8;
-    let block_id = byte_pos / BLOCK_SIZE + block_start_id;
+/// 在对应的位图中dealloc 指定block所占用的bit
+pub fn dealloc_data_bit(block_id: usize) -> bool {
+    let (bit_block_start_id, block_start_id) = (DATA_BITMAP_BLOCK, DATA_BLOCK);
+    //对应位图（包括所有的块）中的总共第K个bit（从左到右）
+    let bit_id = block_id - block_start_id;
+    //对应位图（包括所有的块）中的总共第K个byte（从左到右）
+    let total_byte_pos = bit_id / 8;
+    //单个byte中的第K个bit（从左到右）
+    let bit_pos = bit_id % 8;
+    //这个bit所在的块的块号（从超级块sp=0开始）
+    let bitmap_block_id = total_byte_pos / BLOCK_SIZE + bit_block_start_id;
+    //在单个块中的第K个byte（从左到右）
+    let inner_byte_pos = total_byte_pos % BLOCK_SIZE;
 
-    read_block_to_cache(block_id);
+    dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos)
+}
+
+fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) -> bool {
+    //将含有该bit的位图区域的块读入缓存
+    read_block_to_cache(bitmap_block_id);
+
     let mut bcm = BLOCK_CACHE_MANAGER.lock();
-
     for block in &mut bcm.block_cache {
-        if block.block_id == block_id {
-            let byte = &mut block.bytes[byte_pos];
-            if *byte & 1 << bit_pos == 1 {
-                *byte &= !(1 << bit_pos);
+        if block.block_id == bitmap_block_id {
+            let byte = &mut block.bytes[inner_byte_pos];
+            // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
+            let mask = 0b10000000 >> bit_pos;
+            if (*byte & mask) != 0 {
+                *byte &= !mask;
+                block.modified = true;
                 return true;
             } else {
                 //该位bit没有占用 不需要dealloc
@@ -79,7 +96,7 @@ pub fn dealloc_bit(bitmap_type: BitmapType, id: usize) -> bool {
             }
         }
     }
-    false
+    panic!("unreachable");
 }
 
 fn count_bits(bitmap_type: BitmapType) -> usize {

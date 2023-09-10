@@ -16,14 +16,23 @@ fn main() {
     syscall::info();
     syscall::ls();
     mkdir_test();
+    rmdir_test();
 }
 
 #[allow(unused)]
 fn mkdir_test() {
-    syscall::mkdir("test").unwrap();
+    syscall::mkdir("test");
     syscall::info();
     syscall::ls();
 }
+
+#[allow(unused)]
+fn rmdir_test() {
+    syscall::rmdir("test");
+    syscall::info();
+    syscall::ls();
+}
+
 #[allow(unused)]
 fn force_init() {
     SFS.lock().force_clear();

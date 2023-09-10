@@ -5,7 +5,7 @@ use std::{fs::File, io::Write};
 
 use crate::{
     bitmap::{count_data_blocks, count_inodes},
-    block::sync_all_block_cache,
+    block::BLOCK_CACHE_MANAGER,
     inode::Inode,
     super_block::SuperBlock,
 };
@@ -65,6 +65,7 @@ impl SampleFileSystem {
         }
         let mut sfs = Self::default();
         Self::force_clear(&mut sfs);
+        info!("successfully init fs");
         sfs
     }
 
@@ -97,7 +98,7 @@ impl SampleFileSystem {
         // 创建root_inode
         let root_inode = Inode::new_root();
 
-        sync_all_block_cache();
+        BLOCK_CACHE_MANAGER.lock().block_cache.clear();
         *self = Self {
             current_inode: root_inode.clone(),
             root_inode,

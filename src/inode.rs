@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::{cmp::min, mem::size_of, time::SystemTime};
 
 use crate::{
-    bitmap::{self, alloc_bit},
+    bitmap::{self, alloc_bit, dealloc_data_bit, dealloc_inode_bit, BitmapType},
     block::{
-        get_block_buffer, write_block, ADDR_TOTAL_SIZE, DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM,
-        FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
+        get_block_buffer, write_block, BlockIDType, ADDR_TOTAL_SIZE, BLOCK_ADDR_SIZE,
+        DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM, FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
     },
     dirent::DirEntry,
     simple_fs::{BLOCK_SIZE, DATA_BLOCK, INODE_BLOCK},
@@ -24,7 +24,7 @@ pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SE
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Inode {
     // 内存要对齐！
-    inode_type: InodeType,
+    pub inode_type: InodeType,
     mode: FileMode, // 权限
     nlink: u8,
     gid: u16,
@@ -33,7 +33,7 @@ pub struct Inode {
     size: u32,
     time_info: u64,
     // 8个直接，1个一级，一个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【地址】
-    pub addr: [u32; ADDR_TOTAL_SIZE],
+    pub addr: [BlockIDType; ADDR_TOTAL_SIZE],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -65,9 +65,10 @@ bitflags! {
 }
 
 impl Inode {
+    // 创建根节点
     pub fn new_root() -> Self {
         assert_eq!(64, INODE_SIZE);
-        let inode_id = alloc_bit(bitmap::BitmapType::Inode).unwrap() as u16;
+        let inode_id = alloc_bit(BitmapType::Inode).unwrap() as u16;
         assert_eq!(0, inode_id, "re-alloc a root inode!");
         let mut root = Self {
             inode_type: InodeType::Diretory,
@@ -90,6 +91,7 @@ impl Inode {
         root
     }
 
+    // 申请一个inode
     pub fn alloc(
         inode_type: InodeType,
         parent_inode: &mut Inode,
@@ -97,7 +99,7 @@ impl Inode {
         size: u32,
     ) -> Option<Self> {
         // 申请一个inode id
-        let inode_id = alloc_bit(bitmap::BitmapType::Inode)? as u16;
+        let inode_id = alloc_bit(BitmapType::Inode)? as u16;
         let mut inode = Self {
             inode_type,
             mode,
@@ -124,6 +126,69 @@ impl Inode {
 
     pub fn alloc_dir(parent_inode: &mut Inode) -> Option<Self> {
         Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0)
+    }
+
+    /// 移除自身inode，从位图中dealloc，清空所拥有的数据（递归dealloc所拥有的block(不需要清空内容，只需要dealloc）
+    pub fn dealloc(&mut self) {
+        //0.1 dealloc 自己
+        assert!(dealloc_inode_bit(self.inode_id as usize));
+        //0.2 unlink(主要针对目录.和..)
+        self.unlinkat();
+
+        //1. dealloc直接块
+        for i in 0..DIRECT_BLOCK_NUM {
+            let id = self.addr[i] as usize;
+            if id == 0 {
+                return;
+            }
+            dealloc_data_bit(id);
+        }
+
+        //2.1 dealloc一级块
+        let first_id = self.get_first_id();
+        if first_id == 0 {
+            return;
+        }
+        dealloc_data_bit(first_id);
+        //2.2 然后dealloc一级块中的每个直接块
+        dealloc_first_blocks(first_id);
+
+        //3.1 dealloc二级块
+        let second_id = self.get_second_id();
+        if second_id == 0 {
+            return;
+        }
+        dealloc_data_bit(second_id);
+        //3.2 再dealloc二级块的一级块
+        let mut first_ids = Vec::new();
+        for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+            let start = i * BLOCK_ADDR_SIZE;
+            let end = start + BLOCK_ADDR_SIZE;
+            let first_block = get_block_buffer(second_id, start, end).unwrap();
+            let first_id: u32 = bincode::deserialize(&first_block).unwrap();
+            first_ids.push(first_id);
+            dealloc_data_bit(first_id as usize);
+        }
+        //3.3 最后dealloc二级块中的每个一级块的直接块
+        for first_id in &first_ids {
+            dealloc_first_blocks(*first_id as usize);
+        }
+    }
+
+    pub fn get_first_id(&self) -> usize {
+        self.addr[DIRECT_BLOCK_NUM] as usize
+    }
+
+    pub fn set_first_id(&mut self, first_id: BlockIDType) {
+        self.addr[DIRECT_BLOCK_NUM] = first_id;
+    }
+
+    pub fn get_second_id(&self) -> usize {
+        self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] as usize
+    }
+
+    pub fn set_second_id(&mut self, second_id: BlockIDType) {
+        self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] = second_id;
     }
 
     /// 一次性为inode申请inode.size大小的block
@@ -155,7 +220,7 @@ impl Inode {
             0
         };
 
-        let ty = bitmap::BitmapType::Data;
+        let ty = BitmapType::Data;
         let start = DATA_BLOCK as u32;
         // 为直接块申请
         for i in 0..direct_nums {
@@ -166,7 +231,7 @@ impl Inode {
         // 为一级间接块申请
         if first_nums > 0 {
             let first_id = alloc_bit(ty)? + start;
-            self.addr[DIRECT_BLOCK_NUM] = first_id;
+            self.set_first_id(first_id);
 
             // 在一级间接块中申请需要的数据块地址
             let mut direct_addrs = Vec::new();
@@ -212,6 +277,7 @@ impl Inode {
         Some(())
     }
 
+    /// 直接从block读取inode信息
     pub fn read(inode_id: usize) -> Option<Self> {
         let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
         let inode_pos = inode_id % 16;
@@ -223,6 +289,7 @@ impl Inode {
         bincode::deserialize(&buffer).ok()
     }
 
+    ///将inode写入缓存中
     pub fn cache(&self) {
         let inode_id = self.inode_id as usize;
         let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
@@ -250,10 +317,20 @@ impl Inode {
     /// 展示目录信息
     pub fn ls(&self) {
         assert!(self.is_dir());
-        DirEntry::get_all_dirent(&self.addr)
+        DirEntry::get_all_dirent(self)
             .unwrap()
             .iter()
-            .for_each(|(_, dir)| println!("{}", dir.get_filename()));
+            .for_each(|(_, _, dir)| println!("{}", dir.get_filename()));
+    }
+}
+
+fn dealloc_first_blocks(first_id: usize) {
+    for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+        let start = i * BLOCK_ADDR_SIZE;
+        let end = start + BLOCK_ADDR_SIZE;
+        let direct_block = get_block_buffer(first_id, start, end).unwrap();
+        let id: u32 = bincode::deserialize(&direct_block).unwrap();
+        dealloc_data_bit(id as usize);
     }
 }
 

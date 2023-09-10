@@ -42,6 +42,16 @@ impl PartialEq for Block {
     }
 }
 
+impl Block {
+    pub fn modify_bytes<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut [u8]),
+    {
+        f(&mut self.bytes);
+        self.modified = true;
+    }
+}
+
 pub struct BlockCacheManager {
     pub block_cache: VecDeque<Block>,
 }
@@ -91,10 +101,10 @@ pub fn read_block_to_cache(block_id: usize) {
     // 时钟算法管理缓存，队头是刚进来的，队尾是后进来的（方便遍历的时候最快找到刚加入缓存的块）
     if bcm.block_cache.len() == BLOCK_CACHE_LIMIT {
         loop {
-            let mut blk = bcm.block_cache.pop_back().unwrap();
-            if blk.modified {
-                blk.modified = false;
-                bcm.block_cache.push_front(blk);
+            let mut block = bcm.block_cache.pop_back().unwrap();
+            if block.modified {
+                block.modified = false;
+                bcm.block_cache.push_front(block);
             } else {
                 break;
             }
@@ -131,11 +141,12 @@ pub fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte:
         if block.block_id == block_id {
             // 将 object 序列化
             match bincode::serialize(object) {
-                Ok(bytes) => {
-                    let end_byte = bytes.len() + start_byte;
-                    trace!("write block{}, len {}B", block_id, bytes.len());
-                    block.bytes[start_byte..end_byte].clone_from_slice(&bytes);
-                    block.modified = true;
+                Ok(obj_bytes) => {
+                    let end_byte = obj_bytes.len() + start_byte;
+                    trace!("write block{}, len {}B", block_id, obj_bytes.len());
+                    block.modify_bytes(|bytes_arr| {
+                        bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
+                    });
                     return;
                 }
                 Err(err) => {
@@ -247,18 +258,18 @@ fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + PartialEq>(
 }
 
 /// 获取一个直接块
-fn get_direct_block(id: u32) -> Option<Vec<u8>> {
+fn get_direct_block(id: BlockIDType) -> Option<Vec<u8>> {
     get_block_buffer(id as usize, 0, BLOCK_SIZE)
 }
 
 /// 获取一个一级块所包含的所有直接块
-fn get_first_blocks(first_id: u32) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> {
+fn get_first_blocks(first_id: BlockIDType) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
     let mut v = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
         let addr_buff = get_block_buffer(first_id as usize, start, end)?;
-        let direct_id: u32 = bincode::deserialize(&addr_buff).ok()?;
+        let direct_id: BlockIDType = bincode::deserialize(&addr_buff).ok()?;
         let buffer = get_direct_block(direct_id)?;
         v.push((BlockLevel::FirstIndirect, direct_id, buffer));
     }
@@ -266,13 +277,13 @@ fn get_first_blocks(first_id: u32) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> {
 }
 
 /// 获取一个二级块所包含的所有直接块
-fn get_second_blocks(second_id: u32) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> {
+fn get_second_blocks(second_id: BlockIDType) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
     let mut v = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
         let addr_buff = get_block_buffer(second_id as usize, start, end)?;
-        let first_id: u32 = bincode::deserialize(&addr_buff).ok()?;
+        let first_id: BlockIDType = bincode::deserialize(&addr_buff).ok()?;
         let mut buffers = get_first_blocks(first_id)?;
         for (level, _, _) in &mut buffers {
             *level = BlockLevel::SecondIndirect;
@@ -283,7 +294,7 @@ fn get_second_blocks(second_id: u32) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> 
 }
 
 /// 获取所有直接块（包含空块，即便地址有效）
-pub fn get_all_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> {
+pub fn get_all_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
     let mut v = Vec::new();
     // 直接块
     for i in 0..DIRECT_BLOCK_NUM {
@@ -296,14 +307,14 @@ pub fn get_all_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> 
     }
 
     // 一级
-    let first_id = inode.get_first_id() as u32;
+    let first_id = inode.get_first_id() as BlockIDType;
     if first_id == 0 {
         return Some(v);
     }
     v.append(&mut get_first_blocks(first_id)?);
 
     // 二级
-    let second_id = inode.get_second_id() as u32;
+    let second_id = inode.get_second_id() as BlockIDType;
     if second_id == 0 {
         return Some(v);
     }
@@ -313,7 +324,7 @@ pub fn get_all_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> 
 }
 
 /// 获取所有非空块
-pub fn get_all_valid_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, u32, Vec<u8>)>> {
+pub fn get_all_valid_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
     let mut v = get_all_blocks(inode)?;
     // 保留非空block
     v.retain(|(_, _, block)| !is_empty(block));
@@ -466,7 +477,7 @@ pub fn cache_msg() {
 pub fn sync_all_block_cache() {
     BLOCK_CACHE_MANAGER.lock().block_cache.clear();
     // 重新读取已写入的信息
-    SFS.lock().read();
+    SFS.lock().update();
 }
 
 /// 缓存自动更新策略,当block drop的时候 自动写入本地文件中

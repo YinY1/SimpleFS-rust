@@ -30,3 +30,10 @@ pub fn rmdir(name: &str) {
         sync_all_block_cache();
     }
 }
+
+#[allow(unused)]
+pub fn cd(name: &str) {
+    if dirent::cd(name).is_none() {
+        error!("error in cd");
+    }
+}

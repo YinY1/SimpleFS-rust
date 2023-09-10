@@ -41,8 +41,7 @@ pub fn alloc_bit(bitmap_type: BitmapType) -> Option<u32> {
                                     return None;
                                 }
                             }
-                            *byte |= 1 << j;
-                            block.modified = true;
+                            block.modify_bytes(|bytes_arr| bytes_arr[i] |= 1 << j);
                             trace!("alloc id {} for a {:?}", id, bitmap_type);
                             return Some(id);
                         }
@@ -87,8 +86,7 @@ fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) ->
             // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
             let mask = 0b10000000 >> bit_pos;
             if (*byte & mask) != 0 {
-                *byte &= !mask;
-                block.modified = true;
+                block.modify_bytes(|bytes_arr| bytes_arr[inner_byte_pos] &= !mask);
                 return true;
             } else {
                 //该位bit没有占用 不需要dealloc

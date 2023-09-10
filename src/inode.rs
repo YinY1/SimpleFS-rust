@@ -314,13 +314,19 @@ impl Inode {
         matches!(self.inode_type, InodeType::Diretory)
     }
 
-    /// 展示目录信息
+    /// 展示当前inode目录的信息
     pub fn ls(&self) {
         assert!(self.is_dir());
         DirEntry::get_all_dirent(self)
             .unwrap()
             .iter()
-            .for_each(|(_, _, dir)| println!("{}", dir.get_filename()));
+            .for_each(|(_, _, dir)| {
+                print!("{}", dir.get_filename());
+                if dir.is_dir {
+                    print!("/");
+                }
+                println!();
+            });
     }
 }
 

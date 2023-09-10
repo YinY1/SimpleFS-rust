@@ -40,6 +40,7 @@ pub struct SampleFileSystem {
     pub root_inode: Inode,
     pub super_block: SuperBlock,
     pub current_inode: Inode,
+    pub cwd: String,
 }
 
 impl SampleFileSystem {
@@ -51,7 +52,13 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block: SuperBlock::read().unwrap(),
+            cwd: String::from("/root"),
         };
+    }
+    /// 只从文件系统读出可能更改的root inode信息
+    pub fn update(&mut self) {
+        trace!("update SFS");
+        self.root_inode = Inode::read(0).unwrap();
     }
     ///初始化SFS
     pub fn init() -> Self {
@@ -74,11 +81,12 @@ impl SampleFileSystem {
         println!("-----------------------");
         println!("{:?}", self.super_block);
         println!("{:?}", self.root_inode);
-        let (alloced, _) = count_inodes();
-        println!("[file counts] {}", alloced);
+        let (alloced, valid) = count_inodes();
+        println!("[Inode  used] {}", alloced);
+        println!("[Inode valid] {}", valid);
         let (alloced, valid) = count_data_blocks();
-        println!("[Disk used ]  {}", alloced * BLOCK_SIZE,);
-        println!("[Disk valid]  {}", valid * BLOCK_SIZE)
+        println!("[Disk   used] {}", alloced * BLOCK_SIZE,);
+        println!("[Disk  valid] {}", valid * BLOCK_SIZE)
     }
 
     /// 强制覆盖一份新的FS文件，可以看作是格式化
@@ -103,6 +111,7 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block,
+            cwd: String::from("/root"),
         };
     }
 }

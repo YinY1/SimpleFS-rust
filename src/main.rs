@@ -2,9 +2,12 @@ use std::io::{self, Write};
 
 use simple_fs::SFS;
 
+use crate::inode::FileMode;
+
 mod bitmap;
 mod block;
 mod dirent;
+mod file;
 mod inode;
 mod simple_fs;
 mod super_block;
@@ -51,7 +54,7 @@ fn basic_bash() {
         if input.is_empty() {
             continue;
         }
-        if input == "quit" {
+        if input == "EXIT" {
             return;
         }
         let args: Vec<&str> = input.split_whitespace().collect();
@@ -59,14 +62,18 @@ fn basic_bash() {
             1 => match args[0] {
                 "ls" => syscall::ls(),
                 "info" => syscall::info(),
+                "check" => syscall::check(),
                 _ => println!("invalid args"),
             },
             2 => {
                 let name = args[1];
                 match args[0] {
                     "cd" => syscall::cd(name),
-                    "mkdir" => syscall::mkdir(name),
-                    "rmdir" => syscall::rmdir(name),
+                    "md" => syscall::mkdir(name),
+                    "rd" => syscall::rmdir(name),
+                    "newfile" => syscall::new_file(name,FileMode::RDWR),
+                    "cat" => syscall::cat(name),
+                    "del" => syscall::del(name),
                     _ => println!("invalid args"),
                 }
             }

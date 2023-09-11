@@ -217,7 +217,7 @@ impl DirEntry {
     }
 }
 
-pub fn mkdir(name: &str, parent_inode: &mut Inode) -> Option<()> {
+pub fn make_directory(name: &str, parent_inode: &mut Inode) -> Option<()> {
     if is_special_dir(name) {
         println!("cannot make such diretory");
         return None;
@@ -239,7 +239,7 @@ pub fn mkdir(name: &str, parent_inode: &mut Inode) -> Option<()> {
     Some(())
 }
 
-pub fn rmdir(name: &str, parent_inode: &mut Inode) -> Option<()> {
+pub fn remove_directory(name: &str, parent_inode: &mut Inode) -> Option<()> {
     if is_special_dir(name) {
         println!("cannot make such diretory");
         return None;

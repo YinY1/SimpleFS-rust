@@ -52,7 +52,7 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block: SuperBlock::read().unwrap(),
-            cwd: String::from("/root"),
+            cwd: String::from("~"),
         };
     }
     /// 只从文件系统读出可能更改的root inode信息
@@ -111,8 +111,14 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block,
-            cwd: String::from("/root"),
+            cwd: String::from("~"),
         };
+    }
+    
+    // 重置超级块
+    pub fn check(&mut self) {
+        let sp = SuperBlock::new();
+        self.super_block = sp;
     }
 }
 

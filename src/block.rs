@@ -217,6 +217,20 @@ pub fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq>(
     None
 }
 
+pub fn clear_block(block_id: usize) {
+    read_block_to_cache(block_id);
+
+    let mut bcm = BLOCK_CACHE_MANAGER.lock();
+    for block in &mut bcm.block_cache {
+        if block.block_id == block_id {
+            block.bytes = [0; BLOCK_SIZE];
+            block.modified = true;
+            return;
+        }
+    }
+    error!("unreachable clear_block");
+}
+
 fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Option<()> {
     let new_first_block = alloc_bit(BitmapType::Data)?;
     alloc_new_first(new_first_block as usize, object)?;

@@ -1,7 +1,7 @@
 use log::{info, trace};
 
 use crate::{
-    block::{get_block_buffer, read_block_to_cache, BLOCK_CACHE_MANAGER},
+    block::{clear_block, get_block_buffer, read_block_to_cache, BLOCK_CACHE_MANAGER},
     simple_fs::*,
 };
 
@@ -58,7 +58,7 @@ pub fn dealloc_inode_bit(inode_id: usize) -> bool {
     dealloc_bit(INODE_BITMAP_BLOCK, inode_id / 8, inode_id)
 }
 
-/// 在对应的位图中dealloc 指定block所占用的bit
+/// 在对应的位图中dealloc 指定block所占用的bit, 同时清空该block
 pub fn dealloc_data_bit(block_id: usize) -> bool {
     let (bit_block_start_id, block_start_id) = (DATA_BITMAP_BLOCK, DATA_BLOCK);
     //对应位图（包括所有的块）中的总共第K个bit（从左到右）
@@ -72,7 +72,13 @@ pub fn dealloc_data_bit(block_id: usize) -> bool {
     //在单个块中的第K个byte（从左到右）
     let inner_byte_pos = total_byte_pos % BLOCK_SIZE;
 
-    dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos)
+    match dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos) {
+        true => {
+            clear_block(block_id);
+            true
+        }
+        false => false,
+    }
 }
 
 fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) -> bool {
@@ -86,6 +92,7 @@ fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) ->
             // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
             let mask = 0b10000000 >> bit_pos;
             if (*byte & mask) != 0 {
+                // 将该bit置0表示空闲
                 block.modify_bytes(|bytes_arr| bytes_arr[inner_byte_pos] &= !mask);
                 return true;
             } else {

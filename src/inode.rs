@@ -128,7 +128,7 @@ impl Inode {
         Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0)
     }
 
-    /// 移除自身inode，从位图中dealloc，清空所拥有的数据（递归dealloc所拥有的block(不需要清空内容，只需要dealloc）
+    /// 移除自身inode，从位图中dealloc，清空所拥有的数据（递归dealloc所拥有的block及其内容）
     pub fn dealloc(&mut self) {
         //0.1 dealloc 自己
         assert!(dealloc_inode_bit(self.inode_id as usize));

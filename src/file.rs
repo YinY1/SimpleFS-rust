@@ -31,7 +31,7 @@ pub fn create_file(name: &str, mode: FileMode, parent_inode: &mut Inode) -> Opti
     // 按大小申请inode
     let mut inode = Inode::alloc(InodeType::File, parent_inode, mode, size)?;
     inode.linkat();
-    
+
     dirent.inode_id = inode.inode_id;
     // 将文件写入block中
     let blocks = get_all_blocks(&inode)?;
@@ -72,6 +72,9 @@ pub fn open_file(name: &str, parent_inode: &Inode) -> Option<String> {
     if dirent.get_block_id(parent_inode).is_none() {
         println!("no such file");
         None
+    } else if dirent.is_dir {
+        println!("cannot open a directory");
+        None
     } else {
         //获取内容
         let inode = Inode::read(dirent.inode_id as usize)?;
@@ -79,13 +82,13 @@ pub fn open_file(name: &str, parent_inode: &Inode) -> Option<String> {
         let mut content = String::new();
         for (_, _, block) in blocks {
             let string: String = bincode::deserialize(&block).ok()?;
-            content.push_str(&string);
+            content.push_str(&["\n", &string].concat());
         }
         Some(content)
     }
 }
 
-pub fn copy_file(source_path:&str,target_path:&str) -> Option<()> {
+pub fn copy_file(source_path: &str, target_path: &str) -> Option<()> {
     Some(())
 }
 
@@ -108,6 +111,7 @@ fn read_from_cli() -> String {
     inputs
 }
 
+/// 将input string按块大小分割成数组
 fn split_inputs(inputs: String) -> Vec<String> {
     inputs
         .chars()

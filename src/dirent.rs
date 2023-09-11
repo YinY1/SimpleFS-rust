@@ -123,8 +123,9 @@ impl DirEntry {
             .iter()
             .find_map(|(level, block_id, dir)| {
                 if self == dir {
-                    // 找到之后更新一下对应的inode id
+                    // 找到之后更新一下对应的inode id和类型
                     self.inode_id = dir.inode_id;
+                    self.is_dir = dir.is_dir;
                     Some((*level, *block_id))
                 } else {
                     None
@@ -266,6 +267,14 @@ pub fn remove_directory(name: &str, parent_inode: &mut Inode) -> Option<()> {
 
 /// 进入某目录（将current inode更换为所指目录项的inode)
 pub fn cd(path: &str) -> Option<()> {
+    // 是根目录直接返回
+    if path == "~" {
+        let mut fs = SFS.lock();
+        fs.current_inode = fs.root_inode.clone();
+        fs.cwd = String::from("~");
+        return Some(());
+    }
+    //将路径分割为多段
     let paths: Vec<&str> = path.split('/').collect();
     let mut current_inode = SFS.lock().current_inode.clone();
     // 循环复合目录

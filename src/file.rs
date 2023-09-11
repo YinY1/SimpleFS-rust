@@ -9,7 +9,13 @@ use crate::{
     simple_fs::BLOCK_SIZE,
 };
 
-pub fn create_file(name: &str, mode: FileMode, parent_inode: &mut Inode) -> Option<()> {
+pub fn create_file(
+    name: &str,
+    mode: FileMode,
+    parent_inode: &mut Inode,
+    is_copy: bool,
+    content: &str,
+) -> Option<()> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
@@ -18,13 +24,18 @@ pub fn create_file(name: &str, mode: FileMode, parent_inode: &mut Inode) -> Opti
         return None;
     }
 
-    // 打开io流接受输入（以空行结束）
-    let inputs = read_from_cli();
-    if inputs.len() > MAX_FILE_SIZE {
-        println!("File size limit exceed");
-        return None;
+    let inputs;
+    // 如果是copy模式，则不需要使用stdio
+    if is_copy {
+        inputs = content.to_owned();
+    } else {
+        // 打开io流接受输入（以空行结束）
+        inputs = read_from_cli();
+        if inputs.len() > MAX_FILE_SIZE {
+            println!("File size limit exceed");
+            return None;
+        }
     }
-
     let size = inputs.len() as u32;
     // 按block大小分割
     let input_vecs = split_inputs(inputs);
@@ -82,14 +93,10 @@ pub fn open_file(name: &str, parent_inode: &Inode) -> Option<String> {
         let mut content = String::new();
         for (_, _, block) in blocks {
             let string: String = bincode::deserialize(&block).ok()?;
-            content.push_str(&["\n", &string].concat());
+            content.push_str(&string);
         }
         Some(content)
     }
-}
-
-pub fn copy_file(source_path: &str, target_path: &str) -> Option<()> {
-    Some(())
 }
 
 fn read_from_cli() -> String {
@@ -102,7 +109,7 @@ fn read_from_cli() -> String {
             if input.trim().is_empty() {
                 break;
             }
-            inputs.push_str(&input);
+            inputs.push_str(&[&input, "\n"].concat());
         } else {
             error!("cannot read stdin");
             break;

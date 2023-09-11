@@ -71,12 +71,16 @@ fn basic_bash() {
                     "cd" => syscall::cd(name),
                     "md" => syscall::mkdir(name),
                     "rd" => syscall::rmdir(name),
-                    "newfile" => syscall::new_file(name,FileMode::RDWR),
+                    "newfile" => syscall::new_file(name, FileMode::RDWR),
                     "cat" => syscall::cat(name),
                     "del" => syscall::del(name),
                     _ => println!("invalid args"),
                 }
             }
+            3 => match args[0] {
+                "copy" => syscall::copy(args[1], args[2]),
+                _ => println!("invalid args"),
+            },
             _ => println!("invalid args"),
         }
     }

@@ -52,7 +52,7 @@ pub fn cd(name: &str) {
 #[allow(unused)]
 pub fn new_file(name: &str, mode: FileMode) {
     temp_cd_and_do(name, true, |n| {
-        if file::create_file(n, mode, &mut SFS.lock().current_inode).is_none() {
+        if file::create_file(n, mode, &mut SFS.lock().current_inode, false, "").is_none() {
             info!("error in newfile");
             false
         } else {
@@ -85,6 +85,39 @@ pub fn cat(name: &str) {
                 info!("error in cat");
                 false
             }
+        }
+    });
+}
+
+#[allow(unused)]
+pub fn copy(source_path: &str, target_path: &str) {
+    let mut content = String::new();
+    temp_cd_and_do(source_path, false, |name| {
+        match file::open_file(name, &SFS.lock().current_inode) {
+            Some(source_content) => {
+                content = source_content;
+                true
+            }
+            None => {
+                info!("error in open source file");
+                false
+            }
+        }
+    });
+    temp_cd_and_do(target_path, true, |name| {
+        if file::create_file(
+            name,
+            FileMode::RDWR,
+            &mut SFS.lock().current_inode,
+            true,
+            &content,
+        )
+        .is_none()
+        {
+            info!("error in creating target file");
+            false
+        } else {
+            true
         }
     });
 }

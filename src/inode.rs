@@ -1,5 +1,4 @@
 use bitflags::bitflags;
-use std::fmt::Debug;
 
 use log::{error, trace};
 use serde::{Deserialize, Serialize};
@@ -319,17 +318,25 @@ impl Inode {
     }
 
     /// 展示当前inode目录的信息
-    pub fn ls(&self) {
+    pub fn ls(&self, detail: bool) {
         assert!(self.is_dir());
         DirEntry::get_all_dirent(self)
             .unwrap()
             .iter()
             .for_each(|(_, _, dir)| {
-                print!("{}", dir.get_filename());
+                let mut name = dir.get_filename();
                 if dir.is_dir {
-                    print!("/");
+                    name.push('/');
                 }
-                println!();
+                if detail {
+                    let inode = Self::read(dir.inode_id as usize).unwrap();
+                    let addr = inode.addr[0] as usize * BLOCK_SIZE;
+                    let time = cal_date(inode.time_info);
+                    let mode = inode.mode;
+                    let infos = format!("\taddr:{:#x}\tcreated: {:#?}\t{:?}", addr, time, mode);
+                    name.push_str(&infos);
+                }
+                println!("{}", name);
             });
     }
 }
@@ -349,4 +356,10 @@ fn now_secs() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+fn cal_date(timestamp: u64) -> chrono::NaiveDate {
+    chrono::NaiveDateTime::from_timestamp_opt(timestamp as i64, 0)
+        .unwrap()
+        .date()
 }

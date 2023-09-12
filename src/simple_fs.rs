@@ -79,14 +79,14 @@ impl SampleFileSystem {
     /// 打印文件系统的信息
     pub fn info(&self) {
         println!("-----------------------");
-        println!("{:?}", self.super_block);
-        println!("{:?}", self.root_inode);
+        println!("{:#?}", self.super_block);
+        println!("{:#?}", self.root_inode);
         let (alloced, valid) = count_inodes();
         println!("[Inode  used] {}", alloced);
         println!("[Inode valid] {}", valid);
         let (alloced, valid) = count_data_blocks();
-        println!("[Disk   used] {}", alloced * BLOCK_SIZE,);
-        println!("[Disk  valid] {}", valid * BLOCK_SIZE)
+        println!("[Disk   used] {} KB", alloced);
+        println!("[Disk  valid] {} KB", valid);
     }
 
     /// 强制覆盖一份新的FS文件，可以看作是格式化
@@ -114,7 +114,7 @@ impl SampleFileSystem {
             cwd: String::from("~"),
         };
     }
-    
+
     // 重置超级块
     pub fn check(&mut self) {
         let sp = SuperBlock::new();

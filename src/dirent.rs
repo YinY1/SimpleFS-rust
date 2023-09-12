@@ -1,4 +1,4 @@
-use std::{collections::HashSet, hash::Hash};
+use std::{collections::HashSet, hash::Hash, io};
 
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -249,12 +249,28 @@ pub fn remove_directory(name: &str, parent_inode: &mut Inode) -> Option<()> {
     // 创建一个临时dirent来查找同名目录项
     let mut dirent = DirEntry::new_temp(filename, ext, true)?;
     match dirent.get_block_id(parent_inode) {
+        // 判断目录是否非空
         Some((level, block_id)) => {
             //找到了同名目录项
+            let mut dir_inode = Inode::read(dirent.inode_id as usize)?;
+            let dirs = DirEntry::get_all_dirent(&dir_inode)?;
+            for (_, _, dirent) in dirs {
+                if !dirent.is_special() {
+                    println!("diretory is not empty, continue to remove? [y/n]");
+                    let mut answer = String::new();
+                    io::stdin().read_line(&mut answer).ok()?;
+                    answer = answer.trim().to_string();
+                    if answer == "y" || answer == "Y" {
+                        break;
+                    } else {
+                        println!("remove cancel");
+                        return Some(());
+                    }
+                }
+            }
             remove_object(&dirent, block_id as usize, level, parent_inode);
             dirent.clear_dir();
             // 最后dealloc一下目录自己的inode
-            let mut dir_inode = Inode::read(dirent.inode_id as usize)?;
             dir_inode.dealloc();
             Some(())
         }

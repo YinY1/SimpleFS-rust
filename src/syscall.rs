@@ -16,8 +16,16 @@ pub fn info() {
 }
 
 #[allow(unused)]
-pub fn ls() {
-    SFS.lock().current_inode.ls();
+pub fn ls(detail:bool) {
+    SFS.lock().current_inode.ls(detail);
+}
+
+#[allow(unused)]
+pub fn ls_dir(path: &str,detail:bool) {
+    temp_cd_and_do(path, false, |_| {
+        ls(detail);
+        true
+    });
 }
 
 #[allow(unused)]

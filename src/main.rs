@@ -22,25 +22,6 @@ fn main() {
 }
 
 #[allow(unused)]
-fn mkdir_test() {
-    syscall::mkdir("test");
-    syscall::info();
-    syscall::ls();
-}
-
-#[allow(unused)]
-fn rmdir_test() {
-    syscall::rmdir("test");
-    syscall::info();
-    syscall::ls();
-}
-
-#[allow(unused)]
-fn force_init() {
-    SFS.lock().force_clear();
-}
-
-#[allow(unused)]
 fn basic_bash() {
     loop {
         print!("\n{}\n$ ", SFS.lock().cwd);
@@ -58,30 +39,45 @@ fn basic_bash() {
             return;
         }
         let args: Vec<&str> = input.split_whitespace().collect();
-        match args.len() {
-            1 => match args[0] {
-                "ls" => syscall::ls(),
-                "info" => syscall::info(),
-                "check" => syscall::check(),
-                _ => println!("invalid args"),
-            },
-            2 => {
-                let name = args[1];
-                match args[0] {
-                    "cd" => syscall::cd(name),
-                    "md" => syscall::mkdir(name),
-                    "rd" => syscall::rmdir(name),
-                    "newfile" => syscall::new_file(name, FileMode::RDWR),
-                    "cat" => syscall::cat(name),
-                    "del" => syscall::del(name),
+        if args[0] == "ls" {
+            if args.last().unwrap() == &"/s" {
+                match args.len() {
+                    2 => syscall::ls(true),
+                    3 => syscall::ls_dir(args[1], true),
+                    _ => println!("invalid args"),
+                }
+            } else {
+                match args.len() {
+                    1 => syscall::ls(false),
+                    2 => syscall::ls(true),
                     _ => println!("invalid args"),
                 }
             }
-            3 => match args[0] {
-                "copy" => syscall::copy(args[1], args[2]),
+        } else {
+            match args.len() {
+                1 => match args[0] {
+                    "info" => syscall::info(),
+                    "check" => syscall::check(),
+                    _ => println!("invalid args"),
+                },
+                2 => {
+                    let name = args[1];
+                    match args[0] {
+                        "cd" => syscall::cd(name),
+                        "md" => syscall::mkdir(name),
+                        "rd" => syscall::rmdir(name),
+                        "newfile" => syscall::new_file(name, FileMode::RDWR),
+                        "cat" => syscall::cat(name),
+                        "del" => syscall::del(name),
+                        _ => println!("invalid args"),
+                    }
+                }
+                3 => match args[0] {
+                    "copy" => syscall::copy(args[1], args[2]),
+                    _ => println!("invalid args"),
+                },
                 _ => println!("invalid args"),
-            },
-            _ => println!("invalid args"),
+            }
         }
     }
 }

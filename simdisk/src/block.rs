@@ -1,12 +1,12 @@
 use log::{error, info, trace};
 use serde::{de::DeserializeOwned, Serialize};
-use spin::Mutex;
 use std::{
     collections::VecDeque,
     fs::{File, OpenOptions},
     io::ErrorKind,
     mem::size_of,
     os::unix::prelude::FileExt,
+    sync::Mutex,
 };
 
 use crate::{
@@ -70,7 +70,7 @@ pub fn read_block_to_cache(block_id: usize) {
         bytes: [0; BLOCK_SIZE],
         modified: false,
     };
-    let mut bcm = BLOCK_CACHE_MANAGER.lock();
+    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
 
     if bcm.block_cache.contains(&block) {
         trace!("block {} already in cache", block_id);
@@ -120,7 +120,7 @@ pub fn get_block_buffer(block_id: usize, start_byte: usize, end_byte: usize) -> 
     // 当块不在缓存中时 读入缓存
     read_block_to_cache(block_id);
 
-    let bcm = BLOCK_CACHE_MANAGER.lock();
+    let bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &bcm.block_cache {
         if block.block_id == block_id {
             return Some(block.bytes[start_byte..end_byte].to_vec());
@@ -136,7 +136,7 @@ pub fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte:
     // 当块不在缓存中时 读入缓存
     read_block_to_cache(block_id);
 
-    let mut bcm = BLOCK_CACHE_MANAGER.lock();
+    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &mut bcm.block_cache {
         if block.block_id == block_id {
             // 将 object 序列化
@@ -220,7 +220,7 @@ pub fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq>(
 pub fn clear_block(block_id: usize) {
     read_block_to_cache(block_id);
 
-    let mut bcm = BLOCK_CACHE_MANAGER.lock();
+    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &mut bcm.block_cache {
         if block.block_id == block_id {
             block.bytes = [0; BLOCK_SIZE];
@@ -483,15 +483,15 @@ pub enum BlockLevel {
 
 #[allow(unused)]
 pub fn cache_msg() {
-    let bcm = BLOCK_CACHE_MANAGER.lock();
+    let bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     println!("\ncache info{:?}\n", bcm.block_cache);
 }
 
 /// 清空块缓存，写入磁盘中
 pub fn sync_all_block_cache() {
-    BLOCK_CACHE_MANAGER.lock().block_cache.clear();
+    BLOCK_CACHE_MANAGER.lock().unwrap().block_cache.clear();
     // 重新读取已写入的信息
-    SFS.lock().update();
+    SFS.lock().unwrap().update();
 }
 
 /// 缓存自动更新策略,当block drop的时候 自动写入本地文件中

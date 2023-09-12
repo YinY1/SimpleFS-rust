@@ -24,7 +24,7 @@ fn main() {
 #[allow(unused)]
 fn basic_bash() {
     loop {
-        print!("\n{}\n$ ", SFS.lock().cwd);
+        print!("\n{}\n$ ", SFS.lock().unwrap().cwd);
         io::stdout().flush().unwrap();
 
         let mut input = String::new();

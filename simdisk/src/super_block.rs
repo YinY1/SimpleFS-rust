@@ -15,7 +15,7 @@ use std::fmt::Debug;
 /// inode区 1K块，每个inode 64B，共1K*1K/64=8K个文件
 ///
 /// 剩下的都是data区块
-#[derive(Serialize, Deserialize, Debug,Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SuperBlock {
     magic: usize,   //魔数
     fs_size: usize, // 文件系统大小，块为单位

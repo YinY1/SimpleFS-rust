@@ -1,7 +1,6 @@
 #[allow(unused)]
 use log::{debug, error, info, trace};
-use spin::Mutex;
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, sync::Mutex};
 
 use crate::{
     bitmap::{count_data_blocks, count_inodes},
@@ -106,7 +105,7 @@ impl SampleFileSystem {
         // 创建root_inode
         let root_inode = Inode::new_root();
 
-        BLOCK_CACHE_MANAGER.lock().block_cache.clear();
+        BLOCK_CACHE_MANAGER.lock().unwrap().block_cache.clear();
         *self = Self {
             current_inode: root_inode.clone(),
             root_inode,

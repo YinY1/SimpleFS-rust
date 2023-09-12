@@ -12,16 +12,16 @@ use crate::{
 /// 打印
 #[allow(unused)]
 pub fn info() {
-    SFS.lock().info();
+    SFS.lock().unwrap().info();
 }
 
 #[allow(unused)]
-pub fn ls(detail:bool) {
-    SFS.lock().current_inode.ls(detail);
+pub fn ls(detail: bool) {
+    SFS.lock().unwrap().current_inode.ls(detail);
 }
 
 #[allow(unused)]
-pub fn ls_dir(path: &str,detail:bool) {
+pub fn ls_dir(path: &str, detail: bool) {
     temp_cd_and_do(path, false, |_| {
         ls(detail);
         true
@@ -31,7 +31,7 @@ pub fn ls_dir(path: &str,detail:bool) {
 #[allow(unused)]
 pub fn mkdir(name: &str) {
     temp_cd_and_do(name, true, |n| {
-        if dirent::make_directory(n, &mut SFS.lock().current_inode).is_none() {
+        if dirent::make_directory(n, &mut SFS.lock().unwrap().current_inode).is_none() {
             info!("error in mkdir");
             false
         } else {
@@ -43,7 +43,7 @@ pub fn mkdir(name: &str) {
 #[allow(unused)]
 pub fn rmdir(name: &str) {
     temp_cd_and_do(name, true, |n| {
-        if dirent::remove_directory(n, &mut SFS.lock().current_inode).is_none() {
+        if dirent::remove_directory(n, &mut SFS.lock().unwrap().current_inode).is_none() {
             info!("error in rmdir");
             false
         } else {
@@ -62,7 +62,7 @@ pub fn cd(name: &str) {
 #[allow(unused)]
 pub fn new_file(name: &str, mode: FileMode) {
     temp_cd_and_do(name, true, |n| {
-        if file::create_file(n, mode, &mut SFS.lock().current_inode, false, "").is_none() {
+        if file::create_file(n, mode, &mut SFS.lock().unwrap().current_inode, false, "").is_none() {
             info!("error in newfile");
             false
         } else {
@@ -74,7 +74,7 @@ pub fn new_file(name: &str, mode: FileMode) {
 #[allow(unused)]
 pub fn del(name: &str) {
     temp_cd_and_do(name, true, |n| {
-        if file::remove_file(n, &mut SFS.lock().current_inode).is_none() {
+        if file::remove_file(n, &mut SFS.lock().unwrap().current_inode).is_none() {
             info!("error in del");
             false
         } else {
@@ -86,7 +86,7 @@ pub fn del(name: &str) {
 #[allow(unused)]
 pub fn cat(name: &str) {
     temp_cd_and_do(name, false, |n| {
-        match file::open_file(n, &SFS.lock().current_inode) {
+        match file::open_file(n, &SFS.lock().unwrap().current_inode) {
             Some(content) => {
                 println!("{}", content);
                 true
@@ -114,7 +114,7 @@ pub fn copy(source_path: &str, target_path: &str) {
         }
     } else {
         temp_cd_and_do(source_path, false, |name| {
-            match file::open_file(name, &SFS.lock().current_inode) {
+            match file::open_file(name, &SFS.lock().unwrap().current_inode) {
                 Some(source_content) => {
                     content = source_content;
                     true
@@ -130,7 +130,7 @@ pub fn copy(source_path: &str, target_path: &str) {
         if file::create_file(
             name,
             FileMode::RDWR,
-            &mut SFS.lock().current_inode,
+            &mut SFS.lock().unwrap().current_inode,
             true,
             &content,
         )
@@ -146,7 +146,7 @@ pub fn copy(source_path: &str, target_path: &str) {
 
 #[allow(unused)]
 pub fn check() {
-    SFS.lock().check();
+    SFS.lock().unwrap().check();
 }
 
 /// 临时移动到指定目录,并执行f的操作，如果需要在操作之后更新块缓存，need_sync设置为true
@@ -159,7 +159,7 @@ where
     let mut forward_inode = Inode::default();
     if let Some((path, filename)) = name.rsplit_once('/') {
         // 记录先前的位置
-        let fs = SFS.lock();
+        let fs = SFS.lock().unwrap();
         (forward_wd, forward_inode) = (fs.cwd.clone(), fs.current_inode.clone());
         // 手动unlock fs防止死锁
         drop(fs);
@@ -175,7 +175,7 @@ where
     if f(name) {
         if flag {
             // 还原目录状态
-            let mut fs = SFS.lock();
+            let mut fs = SFS.lock().unwrap();
             fs.cwd = forward_wd;
             fs.current_inode = forward_inode;
         }

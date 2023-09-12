@@ -19,7 +19,7 @@ pub fn alloc_bit(bitmap_type: BitmapType) -> Option<u32> {
         let block_id = block_start_id + n;
         read_block_to_cache(block_id);
 
-        let mut bcm = BLOCK_CACHE_MANAGER.lock();
+        let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
 
         for block in &mut bcm.block_cache {
             if block.block_id == block_id {
@@ -85,7 +85,7 @@ fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) ->
     //将含有该bit的位图区域的块读入缓存
     read_block_to_cache(bitmap_block_id);
 
-    let mut bcm = BLOCK_CACHE_MANAGER.lock();
+    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &mut bcm.block_cache {
         if block.block_id == bitmap_block_id {
             let byte = &mut block.bytes[inner_byte_pos];

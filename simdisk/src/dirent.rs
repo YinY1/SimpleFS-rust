@@ -285,20 +285,20 @@ pub fn remove_directory(name: &str, parent_inode: &mut Inode) -> Option<()> {
 pub fn cd(path: &str) -> Option<()> {
     // 是根目录直接返回
     if path == "~" {
-        let mut fs = SFS.lock();
+        let mut fs = SFS.lock().unwrap();
         fs.current_inode = fs.root_inode.clone();
         fs.cwd = String::from("~");
         return Some(());
     }
     //将路径分割为多段
     let paths: Vec<&str> = path.split('/').collect();
-    let mut current_inode = SFS.lock().current_inode.clone();
+    let mut current_inode = SFS.lock().unwrap().current_inode.clone();
     // 循环复合目录
     for &path in &paths {
         // 找不到了便返回None
         current_inode = try_cd(path, &current_inode)?;
     }
-    let mut fs = SFS.lock();
+    let mut fs = SFS.lock().unwrap();
     fs.current_inode = current_inode;
     // 调整当前目录
     for &path in &paths {

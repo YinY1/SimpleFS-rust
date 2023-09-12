@@ -193,7 +193,11 @@ impl Inode {
 
     /// 一次性为inode申请inode.size大小的block
     fn alloc_data_blocks(&mut self) -> Option<()> {
-        let block_nums = self.size as usize / BLOCK_SIZE + 1;
+        let block_nums = if self.size == 0 {
+            1
+        } else {
+            (self.size as f64 / BLOCK_SIZE as f64).ceil() as usize
+        };
         if block_nums > bitmap::count_valid_data_blocks() {
             // 没有足够的剩余空间
             error!("data not enough");

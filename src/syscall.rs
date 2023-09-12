@@ -1,4 +1,6 @@
-use log::info;
+use std::fs;
+
+use log::{error, info};
 
 use crate::{
     block::sync_all_block_cache,
@@ -92,18 +94,30 @@ pub fn cat(name: &str) {
 #[allow(unused)]
 pub fn copy(source_path: &str, target_path: &str) {
     let mut content = String::new();
-    temp_cd_and_do(source_path, false, |name| {
-        match file::open_file(name, &SFS.lock().current_inode) {
-            Some(source_content) => {
-                content = source_content;
-                true
-            }
-            None => {
-                info!("error in open source file");
-                false
+    // 访问host目录
+    if source_path.starts_with("<host>") {
+        let path = source_path.strip_prefix("<host>").unwrap();
+        match fs::read_to_string(path) {
+            Ok(string) => content = string,
+            Err(err) => {
+                error!("error reading host file");
+                return;
             }
         }
-    });
+    } else {
+        temp_cd_and_do(source_path, false, |name| {
+            match file::open_file(name, &SFS.lock().current_inode) {
+                Some(source_content) => {
+                    content = source_content;
+                    true
+                }
+                None => {
+                    info!("error in open source file");
+                    false
+                }
+            }
+        });
+    }
     temp_cd_and_do(target_path, true, |name| {
         if file::create_file(
             name,

@@ -47,8 +47,8 @@ pub fn create_file(
     // 将文件写入block中
     let blocks = get_all_blocks(&inode)?;
     assert!(blocks.len() >= input_vecs.len());
-    for (i, (_, block_id, _)) in blocks.into_iter().enumerate() {
-        write_block(&input_vecs[i], block_id as usize, 0);
+    for (i, content) in input_vecs.into_iter().enumerate() {
+        write_block(&content, blocks[i].1 as usize, 0);
     }
     // 将目录项写入目录中
     // 为当前父节点持有的block添加一个目录项

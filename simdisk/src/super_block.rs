@@ -1,10 +1,10 @@
 use crate::{
-    block::{get_block_buffer, write_block},
+    block::{get_block_buffer, write_block, deserialize},
     simple_fs::*,
 };
 use log::trace;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use std::{fmt::Debug, io::Error};
 
 /// 共100K块，SB一块
 ///
@@ -59,10 +59,10 @@ impl SuperBlock {
         write_block(self, 0, 0);
     }
 
-    pub fn read() -> Option<Self> {
+    pub async fn read() -> Result<Self, Error> {
         trace!("read super block cache");
-        let buffer = get_block_buffer(0, 0, BLOCK_SIZE)?;
-        bincode::deserialize(&buffer).ok()
+        let buffer = get_block_buffer(0, 0, BLOCK_SIZE).await?;
+        deserialize(&buffer)
     }
 
     pub fn valid(&self) -> bool {

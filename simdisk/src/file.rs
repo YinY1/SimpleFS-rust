@@ -1,27 +1,27 @@
-use std::io::{self, BufRead};
+use std::io::{Error, ErrorKind};
 
-use log::error;
+use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
-    block::{get_all_blocks, insert_object, remove_object, write_block},
+    block::{deserialize, get_all_blocks, insert_object, remove_object, write_block},
     dirent::{self, DirEntry},
     inode::{FileMode, Inode, InodeType, MAX_FILE_SIZE},
     simple_fs::BLOCK_SIZE,
 };
 
-pub fn create_file(
+pub async fn create_file(
     name: &str,
     mode: FileMode,
     parent_inode: &mut Inode,
     is_copy: bool,
     content: &str,
-) -> Option<()> {
+    socket: &mut TcpStream,
+) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    if dirent.get_block_id(parent_inode).is_some() {
-        println!("file already exists");
-        return None;
+    if dirent.get_block_id(parent_inode).await.is_ok() {
+        return Err(Error::new(ErrorKind::AlreadyExists, "file already exists"));
     }
 
     let inputs;
@@ -29,93 +29,80 @@ pub fn create_file(
     if is_copy {
         inputs = content.to_owned();
     } else {
-        // 打开io流接受输入（以空行结束）
-        inputs = read_from_cli();
+        // TODO socket receiv
+        // 从client 读取文件内容
+        let mut input_buffer = [0; 1024]; // TODO 循环读缓冲区直到读完
+        let n = socket.read(&mut input_buffer).await?;
+        if n == 0 {
+            return Err(Error::new(
+                ErrorKind::ConnectionAborted,
+                "cannot read file content from client",
+            ));
+        }
+        inputs = String::from_utf8_lossy(&input_buffer).to_string();
         if inputs.len() > MAX_FILE_SIZE {
-            println!("File size limit exceed");
-            return None;
+            return Err(Error::new(ErrorKind::OutOfMemory, "File size limit exceed"));
         }
     }
     let size = inputs.len() as u32;
     // 按block大小分割
     let input_vecs = split_inputs(inputs);
     // 按大小申请inode
-    let mut inode = Inode::alloc(InodeType::File, parent_inode, mode, size)?;
-    inode.linkat();
+    let mut inode = Inode::alloc(InodeType::File, parent_inode, mode, size).await?;
+    inode.linkat().await;
 
     dirent.inode_id = inode.inode_id;
     // 将文件写入block中
-    let blocks = get_all_blocks(&inode)?;
+    let blocks = get_all_blocks(&inode).await?;
     assert!(blocks.len() >= input_vecs.len());
     for (i, content) in input_vecs.into_iter().enumerate() {
-        write_block(&content, blocks[i].1 as usize, 0);
+        write_block(&content, blocks[i].1 as usize, 0).await;
     }
     // 将目录项写入目录中
     // 为当前父节点持有的block添加一个目录项
-    insert_object(&dirent, parent_inode)?;
-    Some(())
+    insert_object(&dirent, parent_inode).await?;
+    Ok(())
 }
 
-pub fn remove_file(name: &str, parent_inode: &mut Inode) -> Option<()> {
+pub async fn remove_file(name: &str, parent_inode: &mut Inode) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    match dirent.get_block_id(parent_inode) {
-        None => {
-            println!("no such file");
-            None
-        }
-        Some((level, block_id)) => {
+    match dirent.get_block_id(parent_inode).await {
+        Err(err) => Err(err),
+        Ok((level, block_id)) => {
             // 删除目录项
-            remove_object(&dirent, block_id as usize, level, parent_inode);
+            remove_object(&dirent, block_id as usize, level, parent_inode).await?;
             // 释放inode
-            let mut inode = Inode::read(dirent.inode_id as usize)?;
-            inode.dealloc();
-            Some(())
+            let mut inode = Inode::read(dirent.inode_id as usize).await?;
+            inode.dealloc().await;
+            Ok(())
         }
     }
 }
 
-pub fn open_file(name: &str, parent_inode: &Inode) -> Option<String> {
+pub async fn open_file(name: &str, parent_inode: &Inode) -> Result<String, Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    if dirent.get_block_id(parent_inode).is_none() {
-        println!("no such file");
-        None
+    if dirent.get_block_id(parent_inode).await.is_err() {
+        Err(Error::new(ErrorKind::NotFound, "no such file"))
     } else if dirent.is_dir {
-        println!("cannot open a directory");
-        None
+        Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "cannot open a directory",
+        ))
     } else {
         //获取内容
-        let inode = Inode::read(dirent.inode_id as usize)?;
-        let blocks = get_all_blocks(&inode)?;
+        let inode = Inode::read(dirent.inode_id as usize).await?;
+        let blocks = get_all_blocks(&inode).await?;
         let mut content = String::new();
         for (_, _, block) in blocks {
-            let string: String = bincode::deserialize(&block).ok()?;
+            let string: String = deserialize(&block)?;
             content.push_str(&string);
         }
-        Some(content)
+        Ok(content)
     }
-}
-
-fn read_from_cli() -> String {
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-    let mut inputs = String::new();
-    loop {
-        if let Some(Ok(input)) = lines.next() {
-            // 如果输入是空行，则退出
-            if input.trim().is_empty() {
-                break;
-            }
-            inputs.push_str(&[&input, "\n"].concat());
-        } else {
-            error!("cannot read stdin");
-            break;
-        }
-    }
-    inputs
 }
 
 /// 将input string按块大小分割成数组

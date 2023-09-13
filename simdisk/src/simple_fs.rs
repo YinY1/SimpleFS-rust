@@ -1,6 +1,7 @@
 #[allow(unused)]
 use log::{debug, error, info, trace};
-use std::{fs::File, io::Write, sync::Mutex};
+use std::{fs::File, io::Write, sync::Arc};
+use tokio::sync::RwLock;
 
 use crate::{
     bitmap::{count_data_blocks, count_inodes},
@@ -44,52 +45,51 @@ pub struct SampleFileSystem {
 
 impl SampleFileSystem {
     /// 从文件系统中读出相关信息
-    pub fn read(&mut self) {
+    pub async fn read(&mut self) {
         trace!("read SFS");
-        let root_inode = Inode::read(0).unwrap();
+        let root_inode = Inode::read(0).await.unwrap();
         *self = Self {
             current_inode: root_inode.clone(),
             root_inode,
-            super_block: SuperBlock::read().unwrap(),
+            super_block: SuperBlock::read().await.unwrap(),
             cwd: String::from("~"),
         };
     }
     /// 只从文件系统读出可能更改的root inode信息
-    pub fn update(&mut self) {
+    pub async fn update(&mut self) {
         trace!("update SFS");
-        self.root_inode = Inode::read(0).unwrap();
+        self.root_inode = Inode::read(0).await.unwrap();
     }
     ///初始化SFS
-    pub fn init() -> Self {
-        if let Some(sp) = SuperBlock::read() {
+    pub async fn init(&mut self) {
+        if let Ok(sp) = SuperBlock::read().await {
             if sp.valid() {
                 trace!("no need to init fs");
-                let mut s = Self::default();
-                s.read();
-                return s;
+                self.read().await;
             }
         }
-        let mut sfs = Self::default();
-        Self::force_clear(&mut sfs);
+        self.force_clear().await;
         info!("successfully init fs");
-        sfs
     }
 
     /// 打印文件系统的信息
-    pub fn info(&self) {
-        println!("-----------------------");
-        println!("{:#?}", self.super_block);
-        println!("{:#?}", self.root_inode);
-        let (alloced, valid) = count_inodes();
-        println!("[Inode  used] {}", alloced);
-        println!("[Inode valid] {}", valid);
-        let (alloced, valid) = count_data_blocks();
-        println!("[Disk   used] {} KB", alloced);
-        println!("[Disk  valid] {} KB", valid);
+    pub async fn info(&self) -> String {
+        let (alloced_inodes, valid_inodes) = count_inodes().await;
+        let (alloced, valid) = count_data_blocks().await;
+        let infos = vec![
+            format!("-----------------------\n"),
+            format!("{:#?}\n", self.super_block),
+            format!("{:#?}\n", self.root_inode),
+            format!("[Inode  used] {}\n", alloced_inodes),
+            format!("[Inode valid] {}\n", valid_inodes),
+            format!("[Disk   used] {} KB\n", alloced),
+            format!("[Disk  valid] {} KB\n", valid),
+        ];
+        infos.concat()
     }
 
     /// 强制覆盖一份新的FS文件，可以看作是格式化
-    pub fn force_clear(&mut self) {
+    pub async fn force_clear(&mut self) {
         info!("init fs");
         // 创建100MB空文件
         let mut fs_file = File::create(FS_FILE_NAME).expect("cannot create fs file");
@@ -103,15 +103,16 @@ impl SampleFileSystem {
         let super_block = SuperBlock::new();
 
         // 创建root_inode
-        let root_inode = Inode::new_root();
+        let root_inode = Inode::new_root().await;
 
-        BLOCK_CACHE_MANAGER.lock().unwrap().block_cache.clear();
-        *self = Self {
-            current_inode: root_inode.clone(),
-            root_inode,
-            super_block,
-            cwd: String::from("~"),
-        };
+        let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+        let mut w = blk.write().await;
+        w.block_cache.clear();
+
+        self.current_inode = root_inode.clone();
+        self.root_inode = root_inode;
+        self.super_block = super_block;
+        self.cwd = String::from("~");
     }
 
     // 重置超级块
@@ -122,5 +123,6 @@ impl SampleFileSystem {
 }
 
 lazy_static! {
-    pub static ref SFS: Mutex<SampleFileSystem> = Mutex::new(SampleFileSystem::init());
+    pub static ref SFS: Arc<RwLock<SampleFileSystem>> =
+        Arc::new(RwLock::new(SampleFileSystem::default()));
 }

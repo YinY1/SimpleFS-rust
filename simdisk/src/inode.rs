@@ -2,12 +2,17 @@ use bitflags::bitflags;
 
 use log::{error, trace};
 use serde::{Deserialize, Serialize};
-use std::{cmp::min, mem::size_of, time::SystemTime};
+use std::{
+    cmp::min,
+    io::{Error, ErrorKind},
+    mem::size_of,
+    time::SystemTime,
+};
 
 use crate::{
     bitmap::{self, alloc_bit, dealloc_data_bit, dealloc_inode_bit, BitmapType},
     block::{
-        get_block_buffer, write_block, BlockIDType, ADDR_TOTAL_SIZE, BLOCK_ADDR_SIZE,
+        deserialize, get_block_buffer, write_block, BlockIDType, ADDR_TOTAL_SIZE, BLOCK_ADDR_SIZE,
         DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM, FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
     },
     dirent::DirEntry,
@@ -65,9 +70,9 @@ bitflags! {
 
 impl Inode {
     // 创建根节点
-    pub fn new_root() -> Self {
+    pub async fn new_root() -> Self {
         assert_eq!(64, INODE_SIZE);
-        let inode_id = alloc_bit(BitmapType::Inode).unwrap() as u16;
+        let inode_id = alloc_bit(BitmapType::Inode).await.unwrap() as u16;
         assert_eq!(0, inode_id, "re-alloc a root inode!");
         let mut root = Self {
             inode_type: InodeType::Diretory,
@@ -81,24 +86,24 @@ impl Inode {
             time_info: now_secs(),
         };
         // 申请1个data block
-        root.alloc_data_blocks();
+        root.alloc_data_blocks().await.unwrap();
         assert_eq!(DATA_BLOCK, root.addr[0] as usize);
 
         let current_dirent = DirEntry::create_dot(&mut root);
-        write_block(&current_dirent, root.addr[0] as usize, 0);
-        root.cache();
+        write_block(&current_dirent, root.addr[0] as usize, 0).await;
+        root.cache().await;
         root
     }
 
     // 申请一个inode
-    pub fn alloc(
+    pub async fn alloc(
         inode_type: InodeType,
         parent_inode: &mut Inode,
         mode: FileMode,
         size: u32,
-    ) -> Option<Self> {
+    ) -> Result<Self, Error> {
         // 申请一个inode id
-        let inode_id = alloc_bit(BitmapType::Inode)? as u16;
+        let inode_id = alloc_bit(BitmapType::Inode).await? as u16;
         let mut inode = Self {
             inode_type,
             mode,
@@ -111,28 +116,28 @@ impl Inode {
             time_info: now_secs(),
         };
         // 申请对应大小的data block
-        inode.alloc_data_blocks()?;
+        inode.alloc_data_blocks().await?;
 
         if let InodeType::Diretory = inode_type {
             // 申请两个目录项并存放到块中
             let dirs = DirEntry::create_diretory(&mut inode, parent_inode);
-            write_block(&dirs, inode.addr[0] as usize, 0);
+            write_block(&dirs, inode.addr[0] as usize, 0).await;
         }
         // 写入缓存块
-        inode.cache();
-        Some(inode)
+        inode.cache().await;
+        Ok(inode)
     }
 
-    pub fn alloc_dir(parent_inode: &mut Inode) -> Option<Self> {
-        Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0)
+    pub async fn alloc_dir(parent_inode: &mut Inode) -> Result<Self, Error> {
+        Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0).await
     }
 
     /// 移除自身inode，从位图中dealloc，清空所拥有的数据（递归dealloc所拥有的block及其内容）
-    pub fn dealloc(&mut self) {
+    pub async fn dealloc(&mut self) {
         //0.1 dealloc 自己
-        assert!(dealloc_inode_bit(self.inode_id as usize));
+        assert!(dealloc_inode_bit(self.inode_id as usize).await);
         //0.2 unlink(主要针对目录.和..)
-        self.unlinkat();
+        self.unlinkat().await;
 
         //1. dealloc直接块
         for i in 0..DIRECT_BLOCK_NUM {
@@ -140,7 +145,7 @@ impl Inode {
             if id == 0 {
                 return;
             }
-            dealloc_data_bit(id);
+            dealloc_data_bit(id).await;
         }
 
         //2.1 dealloc一级块
@@ -148,29 +153,29 @@ impl Inode {
         if first_id == 0 {
             return;
         }
-        dealloc_data_bit(first_id);
+        dealloc_data_bit(first_id).await;
         //2.2 然后dealloc一级块中的每个直接块
-        dealloc_first_blocks(first_id);
+        dealloc_first_blocks(first_id).await;
 
         //3.1 dealloc二级块
         let second_id = self.get_second_id();
         if second_id == 0 {
             return;
         }
-        dealloc_data_bit(second_id);
+        dealloc_data_bit(second_id).await;
         //3.2 再dealloc二级块的一级块
         let mut first_ids = Vec::new();
         for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
             let start = i * BLOCK_ADDR_SIZE;
             let end = start + BLOCK_ADDR_SIZE;
-            let first_block = get_block_buffer(second_id, start, end).unwrap();
+            let first_block = get_block_buffer(second_id, start, end).await.unwrap();
             let first_id: u32 = bincode::deserialize(&first_block).unwrap();
             first_ids.push(first_id);
-            dealloc_data_bit(first_id as usize);
+            dealloc_data_bit(first_id as usize).await;
         }
         //3.3 最后dealloc二级块中的每个一级块的直接块
         for first_id in &first_ids {
-            dealloc_first_blocks(*first_id as usize);
+            dealloc_first_blocks(*first_id as usize).await;
         }
     }
 
@@ -191,21 +196,21 @@ impl Inode {
     }
 
     /// 一次性为inode申请inode.size大小的block
-    fn alloc_data_blocks(&mut self) -> Option<()> {
+    async fn alloc_data_blocks(&mut self) -> Result<(), Error> {
         let block_nums = if self.size == 0 {
             1
         } else {
             (self.size as f64 / BLOCK_SIZE as f64).ceil() as usize
         };
-        if block_nums > bitmap::count_valid_data_blocks() {
+        if block_nums > bitmap::count_valid_data_blocks().await {
             // 没有足够的剩余空间
             error!("data not enough");
-            return None;
+            return Err(Error::new(ErrorKind::OutOfMemory, "no enough block"));
         }
         if block_nums > DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX {
             // 超过了能表示的最大大小
             error!("file size is too large");
-            return None;
+            return Err(Error::new(ErrorKind::OutOfMemory, "file size is too large"));
         }
 
         // 计算直接块的数量
@@ -227,29 +232,29 @@ impl Inode {
         let start = DATA_BLOCK as u32;
         // 为直接块申请
         for i in 0..direct_nums {
-            let block_id = alloc_bit(ty)? + start;
+            let block_id = alloc_bit(ty).await? + start;
             self.addr[i] = block_id;
         }
 
         // 为一级间接块申请
         if first_nums > 0 {
-            let first_id = alloc_bit(ty)? + start;
+            let first_id = alloc_bit(ty).await? + start;
             self.set_first_id(first_id);
 
             // 在一级间接块中申请需要的数据块地址
             let mut direct_addrs = Vec::new();
             for _ in 0..first_nums {
-                let id = alloc_bit(ty)? + start;
+                let id = alloc_bit(ty).await? + start;
                 direct_addrs.push(id);
             }
 
             // 将申请得到的直接块地址写入间接块中
-            write_block(&direct_addrs, first_id as usize, 0);
+            write_block(&direct_addrs, first_id as usize, 0).await;
         }
 
         // 为二级间接块申请
         if second_nums > 0 {
-            let second_id = alloc_bit(ty)? + start;
+            let second_id = alloc_bit(ty).await? + start;
             self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] = second_id;
 
             // 计算需要申请的一级块的数量
@@ -259,58 +264,58 @@ impl Inode {
 
             for _ in 0..first_nums {
                 // 申请一级间接地址并暂存
-                let first_id = alloc_bit(ty)? + start;
+                let first_id = alloc_bit(ty).await? + start;
                 first_addrs.push(first_id);
 
                 // 在一级间接块中申请需要的数据块地址
                 let mut direct_addrs = Vec::new();
                 for _ in 0..min(rest_nums, FISRT_MAX) {
-                    let id = alloc_bit(ty)? + start;
+                    let id = alloc_bit(ty).await? + start;
                     direct_addrs.push(id);
                 }
                 rest_nums -= FISRT_MAX;
 
                 // 将申请得到的直接块地址写入一级间接块中
-                write_block(&direct_addrs, first_id as usize, 0);
+                write_block(&direct_addrs, first_id as usize, 0).await;
             }
             // 将二级间接块申请得到的地址写入二级块中
-            write_block(&first_addrs, second_id as usize, 0);
+            write_block(&first_addrs, second_id as usize, 0).await;
         }
 
-        Some(())
+        Ok(())
     }
 
     /// 直接从block读取inode信息
-    pub fn read(inode_id: usize) -> Option<Self> {
+    pub async fn read(inode_id: usize) -> Result<Self, Error> {
         let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
         let inode_pos = inode_id % 16;
         let start_byte = inode_pos * INODE_SIZE;
         let end_byte = start_byte + INODE_SIZE;
 
         // 一个Inode 64B
-        let buffer = get_block_buffer(block_id, start_byte, end_byte)?;
-        bincode::deserialize(&buffer).ok()
+        let buffer = get_block_buffer(block_id, start_byte, end_byte).await?;
+        deserialize(&buffer)
     }
 
     ///将inode写入缓存中
-    pub fn cache(&self) {
+    pub async fn cache(&self) {
         let inode_id = self.inode_id as usize;
         let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
         let inode_pos = inode_id % 16;
         let start_byte = inode_pos * INODE_SIZE;
 
         trace!("write inode {} to block {} cache\n", inode_id, block_id);
-        write_block(self, block_id, start_byte);
+        write_block(self, block_id, start_byte).await;
     }
 
-    pub fn linkat(&mut self) {
+    pub async fn linkat(&mut self) {
         self.nlink += 1;
-        self.cache();
+        self.cache().await;
     }
 
-    pub fn unlinkat(&mut self) {
+    pub async fn unlinkat(&mut self) {
         self.nlink -= 1;
-        self.cache();
+        self.cache().await;
     }
 
     fn is_dir(&self) -> bool {
@@ -318,36 +323,36 @@ impl Inode {
     }
 
     /// 展示当前inode目录的信息
-    pub fn ls(&self, detail: bool) {
+    pub async fn ls(&self, detail: bool) -> String {
         assert!(self.is_dir());
-        DirEntry::get_all_dirent(self)
-            .unwrap()
-            .iter()
-            .for_each(|(_, _, dir)| {
-                let mut name = dir.get_filename();
-                if dir.is_dir {
-                    name.push('/');
-                }
-                if detail {
-                    let inode = Self::read(dir.inode_id as usize).unwrap();
-                    let addr = inode.addr[0] as usize * BLOCK_SIZE;
-                    let time = cal_date(inode.time_info);
-                    let mode = inode.mode;
-                    let infos = format!("\taddr:{:#x}\tcreated: {:#?}\t{:?}", addr, time, mode);
-                    name.push_str(&infos);
-                }
-                println!("{}", name);
-            });
+        let mut dir_infos = String::new();
+        for (_, _, dir) in DirEntry::get_all_dirent(self).await.unwrap().iter() {
+            let mut name = dir.get_filename();
+            if dir.is_dir {
+                name.push('/');
+            }
+            if detail {
+                let inode = Self::read(dir.inode_id as usize).await.unwrap();
+                let addr = inode.addr[0] as usize * BLOCK_SIZE;
+                let time = cal_date(inode.time_info);
+                let mode = inode.mode;
+                let infos = format!("\taddr:{:#x}\tcreated: {:#?}\t{:?}", addr, time, mode);
+                name.push_str(&infos);
+            }
+            dir_infos.push_str(&name);
+            dir_infos.push('\n');
+        }
+        dir_infos
     }
 }
 
-fn dealloc_first_blocks(first_id: usize) {
+async fn dealloc_first_blocks(first_id: usize) {
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let direct_block = get_block_buffer(first_id, start, end).unwrap();
+        let direct_block = get_block_buffer(first_id, start, end).await.unwrap();
         let id: u32 = bincode::deserialize(&direct_block).unwrap();
-        dealloc_data_bit(id as usize);
+        dealloc_data_bit(id as usize).await;
     }
 }
 

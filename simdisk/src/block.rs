@@ -1,13 +1,14 @@
 use log::{error, info, trace};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     fs::{File, OpenOptions},
-    io::ErrorKind,
+    io::{Error, ErrorKind},
     mem::size_of,
     os::unix::prelude::FileExt,
-    sync::Mutex,
+    sync::Arc,
 };
+use tokio::sync::RwLock;
 
 use crate::{
     bitmap::{alloc_bit, dealloc_data_bit, BitmapType},
@@ -64,15 +65,16 @@ impl BlockCacheManager {
     }
 }
 /// 将块读入缓存中
-pub fn read_block_to_cache(block_id: usize) {
+pub async fn read_block_to_cache(block_id: usize) {
     let mut block = Block {
         block_id,
         bytes: [0; BLOCK_SIZE],
         modified: false,
     };
-    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut w = blk.write().await;
 
-    if bcm.block_cache.contains(&block) {
+    if w.block_cache.contains(&block) {
         trace!("block {} already in cache", block_id);
         return;
     }
@@ -99,44 +101,50 @@ pub fn read_block_to_cache(block_id: usize) {
     }
 
     // 时钟算法管理缓存，队头是刚进来的，队尾是后进来的（方便遍历的时候最快找到刚加入缓存的块）
-    if bcm.block_cache.len() == BLOCK_CACHE_LIMIT {
+    if w.block_cache.len() == BLOCK_CACHE_LIMIT {
         loop {
-            let mut block = bcm.block_cache.pop_back().unwrap();
+            let mut block = w.block_cache.pop_back().unwrap();
             if block.modified {
                 block.modified = false;
-                bcm.block_cache.push_front(block);
+                w.block_cache.push_front(block);
             } else {
                 break;
             }
         }
     }
-    bcm.block_cache.push_front(block);
-    assert!(bcm.block_cache.len() <= BLOCK_CACHE_LIMIT);
+    w.block_cache.push_front(block);
+    assert!(w.block_cache.len() <= BLOCK_CACHE_LIMIT);
     trace!("block {} push to cache", block_id);
 }
 
 /// 获取指定块中的某一段缓存
-pub fn get_block_buffer(block_id: usize, start_byte: usize, end_byte: usize) -> Option<Vec<u8>> {
+pub async fn get_block_buffer(
+    block_id: usize,
+    start_byte: usize,
+    end_byte: usize,
+) -> Result<Vec<u8>, Error> {
     // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id);
+    read_block_to_cache(block_id).await;
 
-    let bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let bcm = blk.read().await;
     for block in &bcm.block_cache {
         if block.block_id == block_id {
-            return Some(block.bytes[start_byte..end_byte].to_vec());
+            return Ok(block.bytes[start_byte..end_byte].to_vec());
         }
     }
-    None
+    Err(Error::new(ErrorKind::Other, "unreachable"))
 }
 
 /// 将`object`序列化并写入指定的`block_id`中，
 /// 用`start_byte`指示出该`object`会在块中的字节起始位置
-pub fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte: usize) {
+pub async fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte: usize) {
     trace!("write block{}", block_id);
     // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id);
+    read_block_to_cache(block_id).await;
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut bcm = blk.write().await;
 
-    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &mut bcm.block_cache {
         if block.block_id == block_id {
             // 将 object 序列化
@@ -159,68 +167,69 @@ pub fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte:
 }
 
 /// 尝试插入一个object到磁盘中
-pub fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq>(
+pub async fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq>(
     object: &T,
     inode: &mut Inode,
-) -> Option<()> {
-    let all_blocks = get_all_blocks(inode)?;
+) -> Result<(), Error> {
+    let all_blocks = get_all_blocks(inode).await?;
     for (_, id, _) in &all_blocks {
-        if try_insert_to_block(object, *id as usize).is_some() {
-            return Some(());
+        if try_insert_to_block(object, *id as usize).await.is_ok() {
+            return Ok(());
         }
         // 如果该块没有空余，继续找
     }
     // 没有空余的，申请
-    let last_level = &all_blocks.last()?.0;
+    let last_level = &all_blocks.last().unwrap().0;
     match *last_level {
         BlockLevel::Direct => {
             //申请一个块
             for i in 0..DIRECT_BLOCK_NUM {
                 if inode.addr[i] == 0 {
-                    let new_block_id = alloc_bit(BitmapType::Data)?;
+                    let new_block_id = alloc_bit(BitmapType::Data).await?;
                     trace!("add a new direct block {}", new_block_id);
                     // 将地址写回inode中
                     inode.addr[i] = new_block_id;
-                    write_block(object, new_block_id as usize, 0);
-                    return Some(());
+                    write_block(object, new_block_id as usize, 0).await;
+                    return Ok(());
                 }
             }
             // 直接块用完了，要申请一个新的一级块
-            let new_first_id = alloc_bit(BitmapType::Data)?;
+            let new_first_id = alloc_bit(BitmapType::Data).await?;
             trace!("add a new first block {}", new_first_id);
             // 将一级地址写回inode中
             inode.set_first_id(new_first_id);
-            return alloc_new_first(new_first_id as usize, object);
+            alloc_new_first(new_first_id as usize, object).await
         }
         BlockLevel::FirstIndirect => {
             // 一级间接块的已有的所有直接块没有空间了
             if all_blocks.len() < FISRT_MAX + DIRECT_BLOCK_NUM {
                 // 一级间接块本身还有空间，直接附加
-                return alloc_new_first(inode.get_first_id(), object);
+                alloc_new_first(inode.get_first_id(), object).await
             } else {
                 // 一级块没空间了，要找二级块（返回的是最后一块一级块）
                 // 申请一块新的二级块
-                let new_second_id = alloc_bit(BitmapType::Data)?;
+                let new_second_id = alloc_bit(BitmapType::Data).await?;
                 // 将二级地址写回inode中
                 inode.set_second_id(new_second_id);
-                return alloc_new_second(object, new_second_id as usize);
+                alloc_new_second(object, new_second_id as usize).await
             }
         }
         BlockLevel::SecondIndirect => {
             if all_blocks.len() < SECOND_MAX + FISRT_MAX + DIRECT_BLOCK_NUM {
                 // 最后非空块填满了，申请一块新的一级块
-                return alloc_new_second(object, inode.get_second_id());
+                return alloc_new_second(object, inode.get_second_id()).await;
             }
             // 超限
+            Err(Error::new(ErrorKind::OutOfMemory, "no valid block"))
         }
     }
-    None
 }
 
-pub fn clear_block(block_id: usize) {
-    read_block_to_cache(block_id);
+pub async fn clear_block(block_id: usize) {
+    read_block_to_cache(block_id).await;
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut bcm = blk.write().await;
 
-    let mut bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
     for block in &mut bcm.block_cache {
         if block.block_id == block_id {
             block.bytes = [0; BLOCK_SIZE];
@@ -231,150 +240,158 @@ pub fn clear_block(block_id: usize) {
     error!("unreachable clear_block");
 }
 
-fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Option<()> {
-    let new_first_block = alloc_bit(BitmapType::Data)?;
-    alloc_new_first(new_first_block as usize, object)?;
-    try_insert_to_block(&new_first_block, second_id)?;
-    Some(())
+async fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Result<(), Error> {
+    let new_first_block = alloc_bit(BitmapType::Data).await?;
+    alloc_new_first(new_first_block as usize, object).await?;
+    try_insert_to_block(&new_first_block, second_id).await?;
+    Ok(())
 }
 
-fn alloc_new_first<T: Serialize>(first_id: usize, object: &T) -> Option<()> {
+async fn alloc_new_first<T: Serialize>(first_id: usize, object: &T) -> Result<(), Error> {
     // 申请一块新块
-    let new_block_id = alloc_bit(BitmapType::Data)?;
+    let new_block_id = alloc_bit(BitmapType::Data).await?;
     trace!("add a new block {}", new_block_id);
     // 将object 写入新块
-    write_block(object, new_block_id as usize, 0);
+    write_block(object, new_block_id as usize, 0).await;
     // 把新块id附加到一级块
-    try_insert_to_block(&new_block_id, first_id)
+    try_insert_to_block(&new_block_id, first_id).await
 }
 
 // 尝试写入该block的空闲位置，失败（空间不足）则返回none
-fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + PartialEq>(
+async fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + PartialEq>(
     object: &T,
     block_id: usize,
-) -> Option<()> {
+) -> Result<(), Error> {
     let size = size_of::<T>();
     // 搜索该块的每一个object
     for i in 0..BLOCK_SIZE / size {
         let start = i * size;
         let end = start + size;
         // 获得object大小的buffer
-        let buffer = get_block_buffer(block_id, start, end)?;
+        let buffer = get_block_buffer(block_id, start, end).await?;
         // 如果是默认值（空余位置）
-        let obj: T = bincode::deserialize(&buffer).ok()?;
+        let obj: T = deserialize(&buffer)?;
         if obj == T::default() {
-            write_block(object, block_id, start);
-            return Some(());
+            write_block(object, block_id, start).await;
+            return Ok(());
         }
     }
     // block 没有足够空间
-    None
+    Err(Error::new(ErrorKind::OutOfMemory, "no enough blocks"))
 }
 
 /// 获取一个直接块
-fn get_direct_block(id: BlockIDType) -> Option<Vec<u8>> {
-    get_block_buffer(id as usize, 0, BLOCK_SIZE)
+async fn get_direct_block(id: BlockIDType) -> Result<Vec<u8>, Error> {
+    get_block_buffer(id as usize, 0, BLOCK_SIZE).await
 }
 
 /// 获取一个一级块所包含的所有直接块
-fn get_first_blocks(first_id: BlockIDType) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
+async fn get_first_blocks(
+    first_id: BlockIDType,
+) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let addr_buff = get_block_buffer(first_id as usize, start, end)?;
-        let direct_id: BlockIDType = bincode::deserialize(&addr_buff).ok()?;
-        let buffer = get_direct_block(direct_id)?;
+        let addr_buff = get_block_buffer(first_id as usize, start, end).await?;
+        let direct_id: BlockIDType = deserialize(&addr_buff)?;
+        let buffer = get_direct_block(direct_id).await?;
         v.push((BlockLevel::FirstIndirect, direct_id, buffer));
     }
-    Some(v)
+    Ok(v)
 }
 
 /// 获取一个二级块所包含的所有直接块
-fn get_second_blocks(second_id: BlockIDType) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
+async fn get_second_blocks(
+    second_id: BlockIDType,
+) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let addr_buff = get_block_buffer(second_id as usize, start, end)?;
-        let first_id: BlockIDType = bincode::deserialize(&addr_buff).ok()?;
-        let mut buffers = get_first_blocks(first_id)?;
+        let addr_buff = get_block_buffer(second_id as usize, start, end).await?;
+        let first_id: BlockIDType = deserialize(&addr_buff)?;
+        let mut buffers = get_first_blocks(first_id).await?;
         for (level, _, _) in &mut buffers {
             *level = BlockLevel::SecondIndirect;
         }
         v.append(&mut buffers);
     }
-    Some(v)
+    Ok(v)
 }
 
 /// 获取所有直接块（包含空块，即便地址有效）
-pub fn get_all_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
+pub async fn get_all_blocks(
+    inode: &Inode,
+) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
     // 直接块
     for i in 0..DIRECT_BLOCK_NUM {
         let id = inode.addr[i];
         if id == 0 {
-            return Some(v);
+            return Ok(v);
         }
-        let buffer = get_direct_block(id)?;
+        let buffer = get_direct_block(id).await?;
         v.push((BlockLevel::Direct, id, buffer));
     }
 
     // 一级
     let first_id = inode.get_first_id() as BlockIDType;
     if first_id == 0 {
-        return Some(v);
+        return Ok(v);
     }
-    v.append(&mut get_first_blocks(first_id)?);
+    v.append(&mut get_first_blocks(first_id).await?);
 
     // 二级
     let second_id = inode.get_second_id() as BlockIDType;
     if second_id == 0 {
-        return Some(v);
+        return Ok(v);
     }
-    v.append(&mut get_second_blocks(second_id)?);
+    v.append(&mut get_second_blocks(second_id).await?);
 
-    Some(v)
+    Ok(v)
 }
 
 /// 获取所有非空块
-pub fn get_all_valid_blocks(inode: &Inode) -> Option<Vec<(BlockLevel, BlockIDType, Vec<u8>)>> {
-    let mut v = get_all_blocks(inode)?;
+pub async fn get_all_valid_blocks(
+    inode: &Inode,
+) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
+    let mut v = get_all_blocks(inode).await?;
     // 保留非空block
     v.retain(|(_, _, block)| !is_empty(block));
-    Some(v)
+    Ok(v)
 }
 
 /// 移除一个object，如果这是唯一的object，那么释放这个block
-pub fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned>(
+pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned>(
     object: &T,
     block_id: usize,
     level: BlockLevel,
     inode: &mut Inode,
-) -> Option<()> {
+) -> Result<(), Error> {
     //1.序列化这个block，一一比较
     let size = size_of::<T>();
     let mut exist = false;
     for i in 0..BLOCK_SIZE / size {
         let start = i * size;
         let end = start + size;
-        let buffer = get_block_buffer(block_id, start, end)?;
-        if *object == bincode::deserialize(&buffer).ok()? {
+        let buffer = get_block_buffer(block_id, start, end).await?;
+        if *object == deserialize(&buffer)? {
             exist = true;
             // 覆盖该位置
-            write_block(&T::default(), block_id, start);
+            write_block(&T::default(), block_id, start).await;
             break;
         }
     }
     if !exist {
-        return None;
+        return Err(Error::new(ErrorKind::NotFound, ""));
     }
     //2. 再次序列化，判断是否已空, 如果全空 dealloc
-    let block = get_block_buffer(block_id, 0, BLOCK_SIZE)?;
+    let block = get_block_buffer(block_id, 0, BLOCK_SIZE).await?;
     if !is_empty(&block) {
-        return Some(());
+        return Ok(());
     }
-    dealloc_data_bit(block_id);
+    dealloc_data_bit(block_id).await;
 
     match level {
         BlockLevel::Direct => {
@@ -382,7 +399,7 @@ pub fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned>(
             for i in 0..DIRECT_BLOCK_NUM {
                 if block_id == inode.addr[i] as usize {
                     inode.addr[i] = 0;
-                    return Some(());
+                    return Ok(());
                 }
             }
             panic!("unreachable");
@@ -391,7 +408,7 @@ pub fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned>(
             //3.2. 如果是在一级块，那么还要清除在一级块中的地址，判断释放这个block addr之后一级块是否已空
             let first_id = inode.get_first_id();
             // 在一级块中清除该块的地址
-            remove_block_addr_in_first_block(first_id, block_id)?;
+            remove_block_addr_in_first_block(first_id, block_id).await?;
             inode.set_first_id(0);
         }
         BlockLevel::SecondIndirect => {
@@ -405,58 +422,61 @@ pub fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned>(
             for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
                 start = i * BLOCK_ADDR_SIZE;
                 let end = start + BLOCK_ADDR_SIZE;
-                first_block = get_block_buffer(second_id, start, end)?;
-                first_id = bincode::deserialize(&first_block).ok()?;
-                if remove_block_addr_in_first_block(first_id, block_id).is_some() {
+                first_block = get_block_buffer(second_id, start, end).await?;
+                first_id = deserialize(&first_block)?;
+                if remove_block_addr_in_first_block(first_id, block_id)
+                    .await
+                    .is_ok()
+                {
                     // 找到并清除了，跳出循环
                     break;
                 }
             }
             // 然后检查找到的那个一级块是否空，空了就清掉那个一级块在二级块中的记录
-            first_block = get_block_buffer(first_id, 0, BLOCK_SIZE)?;
+            first_block = get_block_buffer(first_id, 0, BLOCK_SIZE).await?;
             if !is_empty(&first_block) {
                 // 那个一级块还有条目，直接返回
-                return Some(());
+                return Ok(());
             }
             // 在二级块中清除一级块记录
-            write_block(&0u32, second_id, start);
+            write_block(&0u32, second_id, start).await;
 
             // 最后检查二级块 如果二级块空了就把二级块也清空
-            let second_block = get_block_buffer(second_id, 0, BLOCK_SIZE)?;
+            let second_block = get_block_buffer(second_id, 0, BLOCK_SIZE).await?;
             if !is_empty(&second_block) {
-                return Some(());
+                return Ok(());
             }
             // 全空, 释放二级块
-            dealloc_data_bit(second_id);
+            dealloc_data_bit(second_id).await;
             inode.set_second_id(0);
         }
     }
-    Some(())
+    Ok(())
 }
 
 /// 清除一级块中的直接块地址条目，同时一级块变空时dealloc一级块
-fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> Option<()> {
+async fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> Result<(), Error> {
     let mut exist = false;
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let direct_addr = get_block_buffer(first_id, start, end)?;
+        let direct_addr = get_block_buffer(first_id, start, end).await?;
         // 在一级块中找到了这个块的地址，清除
-        if direct_addr == bincode::serialize(&(block_id as u32)).ok()? {
+        if direct_addr == serialize(&(block_id as u32))? {
             exist = true;
-            write_block(&0u32, first_id, start);
+            write_block(&0u32, first_id, start).await;
             break;
         }
     }
     if !exist {
-        return None;
+        return Err(Error::new(ErrorKind::NotFound, ""));
     }
-    let first_block = get_block_buffer(first_id, 0, BLOCK_SIZE)?;
+    let first_block = get_block_buffer(first_id, 0, BLOCK_SIZE).await?;
     if !is_empty(&first_block) {
-        return Some(());
+        return Ok(());
     }
-    dealloc_data_bit(first_id);
-    Some(())
+    dealloc_data_bit(first_id).await;
+    Ok(())
 }
 
 /// 判断block是否是全0
@@ -470,8 +490,8 @@ pub fn is_empty(block: &[u8]) -> bool {
 }
 
 lazy_static! {
-    pub static ref BLOCK_CACHE_MANAGER: Mutex<BlockCacheManager> =
-        Mutex::new(BlockCacheManager::new());
+    pub static ref BLOCK_CACHE_MANAGER: Arc<RwLock<BlockCacheManager>> =
+        Arc::new(RwLock::new(BlockCacheManager::new()));
 }
 
 #[derive(Clone, Copy)]
@@ -481,17 +501,15 @@ pub enum BlockLevel {
     SecondIndirect,
 }
 
-#[allow(unused)]
-pub fn cache_msg() {
-    let bcm = BLOCK_CACHE_MANAGER.lock().unwrap();
-    println!("\ncache info{:?}\n", bcm.block_cache);
-}
-
 /// 清空块缓存，写入磁盘中
-pub fn sync_all_block_cache() {
-    BLOCK_CACHE_MANAGER.lock().unwrap().block_cache.clear();
+pub async fn sync_all_block_cache() {
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut blk_w = blk.write().await;
+    blk_w.block_cache.clear();
     // 重新读取已写入的信息
-    SFS.lock().unwrap().update();
+    let fs = Arc::clone(&SFS);
+    let mut w = fs.write().await;
+    w.update().await;
 }
 
 /// 缓存自动更新策略,当block drop的时候 自动写入本地文件中
@@ -507,4 +525,12 @@ impl Drop for Block {
             }
         }
     }
+}
+
+pub fn deserialize<'a, T: Deserialize<'a>>(buffer: &'a [u8]) -> Result<T, Error> {
+    bincode::deserialize(buffer).map_err(|err| Error::new(ErrorKind::Other, err))
+}
+
+pub fn serialize<T: Serialize>(object: &T) -> Result<Vec<u8>, Error> {
+    bincode::serialize(object).map_err(|err| Error::new(ErrorKind::Other, err))
 }

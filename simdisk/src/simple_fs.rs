@@ -1,6 +1,10 @@
 #[allow(unused)]
 use log::{debug, error, info, trace};
-use std::{fs::File, io::Write, sync::Arc};
+use std::{
+    fs::File,
+    io::{Error, Write},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -61,15 +65,14 @@ impl SampleFileSystem {
         self.root_inode = Inode::read(0).await.unwrap();
     }
     ///初始化SFS
-    pub async fn init(&mut self) {
-        if let Ok(sp) = SuperBlock::read().await {
-            if sp.valid() {
-                trace!("no need to init fs");
-                self.read().await;
-            }
+    pub async fn init(&mut self) -> Result<(), Error> {
+        let sp = SuperBlock::read().await?;
+        if sp.valid() {
+            trace!("no need to init fs");
+            self.read().await;
+            return Ok(());
         }
-        self.force_clear().await;
-        info!("successfully init fs");
+        Err(Error::new(std::io::ErrorKind::Other, ""))
     }
 
     /// 打印文件系统的信息
@@ -91,35 +94,37 @@ impl SampleFileSystem {
     /// 强制覆盖一份新的FS文件，可以看作是格式化
     pub async fn force_clear(&mut self) {
         info!("init fs");
-        // 创建100MB空文件
-        let mut fs_file = File::create(FS_FILE_NAME).expect("cannot create fs file");
-        fs_file
-            .write_all(&[0u8; FS_SIZE])
-            .expect("cannot init fs file");
-
-        drop(fs_file);
-
         // 创建超级块
-        let super_block = SuperBlock::new();
+        let super_block = SuperBlock::new().await;
 
         // 创建root_inode
         let root_inode = Inode::new_root().await;
 
         let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
         let mut w = blk.write().await;
-        w.block_cache.clear();
+        w.sync_and_clear_cache().await.unwrap();
 
-        self.current_inode = root_inode.clone();
-        self.root_inode = root_inode;
-        self.super_block = super_block;
-        self.cwd = String::from("~");
+        *self = Self {
+            current_inode: root_inode.clone(),
+            root_inode,
+            super_block,
+            cwd: "~".to_string(),
+        }
     }
 
     // 重置超级块
-    pub fn check(&mut self) {
-        let sp = SuperBlock::new();
+    pub async fn check(&mut self) {
+        let sp = SuperBlock::new().await;
         self.super_block = sp;
     }
+}
+
+pub fn create_fs_file() {
+    // 创建100MB空文件
+    let mut fs_file = File::create(FS_FILE_NAME).expect("cannot create fs file");
+    fs_file
+        .write_all(&[0u8; FS_SIZE])
+        .expect("cannot init fs file");
 }
 
 lazy_static! {

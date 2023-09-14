@@ -9,8 +9,9 @@ async fn main() -> io::Result<()> {
     println!("Connected to server");
     let mut io_reader = io::BufReader::new(io::stdin());
 
-    let mut stream_buffer = [0; 1024];
     loop {
+        let mut stream_buffer = [0; 1024];
+
         // 0. 发送信息请求bash
         let msg = "bash ok";
         stream.write_all(msg.as_bytes()).await?;
@@ -24,7 +25,8 @@ async fn main() -> io::Result<()> {
 
         let recv_cwd = String::from_utf8_lossy(&stream_buffer);
 
-        print!("{}\n$ ", recv_cwd);
+        println!("{}", recv_cwd.replace('\0', ""));
+        print!("$ ");
         io::stdout().flush().await?;
 
         // 2.1 读取输入
@@ -34,7 +36,7 @@ async fn main() -> io::Result<()> {
         if input.is_empty() {
             continue;
         }
-        if input == "EXIT" {
+        if input.trim().replace('\0', "") == "EXIT" {
             stream.write_all(input.as_bytes()).await?;
             return Ok(());
         }
@@ -43,13 +45,14 @@ async fn main() -> io::Result<()> {
         stream.write_all(input.as_bytes()).await?;
 
         // 2.3 读取返回信息，如果是需要继续输入信息的，则回复，否则不回复
+        stream_buffer = [0; 1024];
         let n = stream.read(&mut stream_buffer).await?;
         if n == 0 {
             eprintln!("error reading answer from server");
             return Err(Error::new(ErrorKind::NotConnected, ""));
         }
         let msg = String::from_utf8_lossy(&stream_buffer);
-        match msg.trim() {
+        match msg.trim().replace('\0', "").as_str() {
             // 需要输入文件内容
             "INPUT FILE CONTENT" => {
                 let inputs = read_file_content(&mut io_reader).await?;
@@ -68,19 +71,21 @@ async fn main() -> io::Result<()> {
                 stream.write_all(answer.as_bytes()).await?;
             }
             // 正常返回文件内容（可能是正常信息，也可能是错误信息
+            "command ok." => continue,
             _ => {
                 println!("{}", msg);
                 continue;
             }
         };
         // 3. 等待server应答
+        stream_buffer = [0; 1024];
         let n = stream.read(&mut stream_buffer).await?;
         if n == 0 {
             eprintln!("error reading answer from server");
             return Err(Error::new(ErrorKind::NotConnected, ""));
         }
         let msg = String::from_utf8_lossy(&stream_buffer);
-        println!("{}", msg);
+        println!("{}", msg.trim().replace('\0', ""));
     }
 }
 

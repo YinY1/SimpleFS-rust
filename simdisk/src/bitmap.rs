@@ -22,7 +22,7 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
     for n in 0..block_nums {
         // 计算当前所在的块的id（起始id是super的0）
         let block_id = block_start_id + n;
-        read_block_to_cache(block_id).await;
+        read_block_to_cache(block_id).await?;
 
         let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
         let mut bcm = blk.write().await;
@@ -80,7 +80,7 @@ pub async fn dealloc_data_bit(block_id: usize) -> bool {
 
     match dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos).await {
         true => {
-            clear_block(block_id).await;
+            let _ = clear_block(block_id).await;
             true
         }
         false => false,
@@ -89,7 +89,7 @@ pub async fn dealloc_data_bit(block_id: usize) -> bool {
 
 async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) -> bool {
     //将含有该bit的位图区域的块读入缓存
-    read_block_to_cache(bitmap_block_id).await;
+    let _ = read_block_to_cache(bitmap_block_id).await;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
 

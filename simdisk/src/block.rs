@@ -2,13 +2,16 @@ use log::{error, info, trace};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::VecDeque,
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Error, ErrorKind},
     mem::size_of,
     os::unix::prelude::FileExt,
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::{
+    io::{AsyncSeekExt, AsyncWriteExt},
+    sync::RwLock,
+};
 
 use crate::{
     bitmap::{alloc_bit, dealloc_data_bit, BitmapType},
@@ -51,6 +54,30 @@ impl Block {
         f(&mut self.bytes);
         self.modified = true;
     }
+
+    pub async fn sync_block(&mut self) -> Result<(), Error> {
+        if self.modified {
+            if let Ok(mut file) = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(FS_FILE_NAME)
+                .await
+            {
+                let buf = self.bytes;
+                info!("drop block{}", self.block_id);
+                let offset = self.block_id * BLOCK_SIZE;
+                let pos = tokio::io::SeekFrom::Start(offset as u64);
+                file.seek(pos)
+                    .await
+                    .map_err(|err| error!("error seek blocks:{}", err))
+                    .unwrap();
+                file.write_all(&buf)
+                    .await
+                    .map_err(|err| error!("error writing blocks:{}", err))
+                    .unwrap();
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct BlockCacheManager {
@@ -63,9 +90,17 @@ impl BlockCacheManager {
             block_cache: VecDeque::new(),
         }
     }
+
+    pub async fn sync_and_clear_cache(&mut self) -> Result<(), Error> {
+        for block in &mut self.block_cache {
+            block.sync_block().await?;
+        }
+        self.block_cache.clear();
+        Ok(())
+    }
 }
 /// 将块读入缓存中
-pub async fn read_block_to_cache(block_id: usize) {
+pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
     let mut block = Block {
         block_id,
         bytes: [0; BLOCK_SIZE],
@@ -76,7 +111,7 @@ pub async fn read_block_to_cache(block_id: usize) {
 
     if w.block_cache.contains(&block) {
         trace!("block {} already in cache", block_id);
-        return;
+        return Ok(());
     }
 
     let offset = block_id * BLOCK_SIZE;
@@ -84,7 +119,7 @@ pub async fn read_block_to_cache(block_id: usize) {
         Ok(file) => {
             if file.read_exact_at(&mut block.bytes, offset as u64).is_err() {
                 error!("cannot read buffer at {}", offset);
-                return;
+                return Ok(());
             }
         }
         Err(error) => {
@@ -96,7 +131,7 @@ pub async fn read_block_to_cache(block_id: usize) {
                     error!("Error opening file: {}", error);
                 }
             };
-            return;
+            return Ok(());
         }
     }
 
@@ -105,16 +140,21 @@ pub async fn read_block_to_cache(block_id: usize) {
         loop {
             let mut block = w.block_cache.pop_back().unwrap();
             if block.modified {
+                // 如果被更改过，则写入本地，标记为没更改 放到队尾
+                block.sync_block().await?;
                 block.modified = false;
                 w.block_cache.push_front(block);
             } else {
+                // 没有被更改，那么直接抛弃
                 break;
             }
         }
     }
+    // 如果缓冲区没满，那么直接加入就可以了
     w.block_cache.push_front(block);
     assert!(w.block_cache.len() <= BLOCK_CACHE_LIMIT);
     trace!("block {} push to cache", block_id);
+    Ok(())
 }
 
 /// 获取指定块中的某一段缓存
@@ -124,7 +164,7 @@ pub async fn get_block_buffer(
     end_byte: usize,
 ) -> Result<Vec<u8>, Error> {
     // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id).await;
+    read_block_to_cache(block_id).await?;
 
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let bcm = blk.read().await;
@@ -138,10 +178,14 @@ pub async fn get_block_buffer(
 
 /// 将`object`序列化并写入指定的`block_id`中，
 /// 用`start_byte`指示出该`object`会在块中的字节起始位置
-pub async fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start_byte: usize) {
+pub async fn write_block<T: serde::Serialize>(
+    object: &T,
+    block_id: usize,
+    start_byte: usize,
+) -> Result<(), Error> {
     trace!("write block{}", block_id);
     // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id).await;
+    read_block_to_cache(block_id).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
 
@@ -155,7 +199,7 @@ pub async fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start
                     block.modify_bytes(|bytes_arr| {
                         bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
                     });
-                    return;
+                    return Ok(());
                 }
                 Err(err) => {
                     error!("cannot serialize:{}", err)
@@ -163,7 +207,7 @@ pub async fn write_block<T: serde::Serialize>(object: &T, block_id: usize, start
             }
         }
     }
-    error!("unreachable write_block");
+    panic!("unreachable write_block")
 }
 
 /// 尝试插入一个object到磁盘中
@@ -189,7 +233,7 @@ pub async fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq
                     trace!("add a new direct block {}", new_block_id);
                     // 将地址写回inode中
                     inode.addr[i] = new_block_id;
-                    write_block(object, new_block_id as usize, 0).await;
+                    write_block(object, new_block_id as usize, 0).await?;
                     return Ok(());
                 }
             }
@@ -225,8 +269,9 @@ pub async fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq
     }
 }
 
-pub async fn clear_block(block_id: usize) {
-    read_block_to_cache(block_id).await;
+/// 清空这块block的内容
+pub async fn clear_block(block_id: usize) -> Result<(), Error> {
+    read_block_to_cache(block_id).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
 
@@ -234,10 +279,10 @@ pub async fn clear_block(block_id: usize) {
         if block.block_id == block_id {
             block.bytes = [0; BLOCK_SIZE];
             block.modified = true;
-            return;
+            return Ok(());
         }
     }
-    error!("unreachable clear_block");
+    panic!("unreachable clear_block");
 }
 
 async fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Result<(), Error> {
@@ -252,7 +297,7 @@ async fn alloc_new_first<T: Serialize>(first_id: usize, object: &T) -> Result<()
     let new_block_id = alloc_bit(BitmapType::Data).await?;
     trace!("add a new block {}", new_block_id);
     // 将object 写入新块
-    write_block(object, new_block_id as usize, 0).await;
+    write_block(object, new_block_id as usize, 0).await?;
     // 把新块id附加到一级块
     try_insert_to_block(&new_block_id, first_id).await
 }
@@ -272,7 +317,7 @@ async fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + Partial
         // 如果是默认值（空余位置）
         let obj: T = deserialize(&buffer)?;
         if obj == T::default() {
-            write_block(object, block_id, start).await;
+            write_block(object, block_id, start).await?;
             return Ok(());
         }
     }
@@ -379,7 +424,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
         if *object == deserialize(&buffer)? {
             exist = true;
             // 覆盖该位置
-            write_block(&T::default(), block_id, start).await;
+            write_block(&T::default(), block_id, start).await?;
             break;
         }
     }
@@ -439,7 +484,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
                 return Ok(());
             }
             // 在二级块中清除一级块记录
-            write_block(&0u32, second_id, start).await;
+            write_block(&0u32, second_id, start).await?;
 
             // 最后检查二级块 如果二级块空了就把二级块也清空
             let second_block = get_block_buffer(second_id, 0, BLOCK_SIZE).await?;
@@ -464,7 +509,7 @@ async fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> R
         // 在一级块中找到了这个块的地址，清除
         if direct_addr == serialize(&(block_id as u32))? {
             exist = true;
-            write_block(&0u32, first_id, start).await;
+            write_block(&0u32, first_id, start).await?;
             break;
         }
     }
@@ -502,29 +547,15 @@ pub enum BlockLevel {
 }
 
 /// 清空块缓存，写入磁盘中
-pub async fn sync_all_block_cache() {
+pub async fn sync_all_block_cache() -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut blk_w = blk.write().await;
-    blk_w.block_cache.clear();
+    blk_w.sync_and_clear_cache().await?;
     // 重新读取已写入的信息
     let fs = Arc::clone(&SFS);
     let mut w = fs.write().await;
     w.update().await;
-}
-
-/// 缓存自动更新策略,当block drop的时候 自动写入本地文件中
-impl Drop for Block {
-    fn drop(&mut self) {
-        if self.modified {
-            if let Ok(file) = OpenOptions::new().write(true).open(FS_FILE_NAME) {
-                info!("drop block{}", self.block_id);
-                let offset = self.block_id * BLOCK_SIZE;
-                let _ = file
-                    .write_all_at(&self.bytes, offset as u64)
-                    .map_err(|err| error!("error writing blocks:{}", err));
-            }
-        }
-    }
+    Ok(())
 }
 
 pub fn deserialize<'a, T: Deserialize<'a>>(buffer: &'a [u8]) -> Result<T, Error> {

@@ -90,7 +90,7 @@ impl Inode {
         assert_eq!(DATA_BLOCK, root.addr[0] as usize);
 
         let current_dirent = DirEntry::create_dot(&mut root);
-        write_block(&current_dirent, root.addr[0] as usize, 0).await;
+        let _ = write_block(&current_dirent, root.addr[0] as usize, 0).await;
         root.cache().await;
         root
     }
@@ -121,7 +121,7 @@ impl Inode {
         if let InodeType::Diretory = inode_type {
             // 申请两个目录项并存放到块中
             let dirs = DirEntry::create_diretory(&mut inode, parent_inode);
-            write_block(&dirs, inode.addr[0] as usize, 0).await;
+            let _ = write_block(&dirs, inode.addr[0] as usize, 0).await;
         }
         // 写入缓存块
         inode.cache().await;
@@ -249,7 +249,7 @@ impl Inode {
             }
 
             // 将申请得到的直接块地址写入间接块中
-            write_block(&direct_addrs, first_id as usize, 0).await;
+            write_block(&direct_addrs, first_id as usize, 0).await?;
         }
 
         // 为二级间接块申请
@@ -276,10 +276,10 @@ impl Inode {
                 rest_nums -= FISRT_MAX;
 
                 // 将申请得到的直接块地址写入一级间接块中
-                write_block(&direct_addrs, first_id as usize, 0).await;
+                write_block(&direct_addrs, first_id as usize, 0).await?;
             }
             // 将二级间接块申请得到的地址写入二级块中
-            write_block(&first_addrs, second_id as usize, 0).await;
+            write_block(&first_addrs, second_id as usize, 0).await?;
         }
 
         Ok(())
@@ -305,7 +305,7 @@ impl Inode {
         let start_byte = inode_pos * INODE_SIZE;
 
         trace!("write inode {} to block {} cache\n", inode_id, block_id);
-        write_block(self, block_id, start_byte).await;
+        let _  = write_block(self, block_id, start_byte).await;
     }
 
     pub async fn linkat(&mut self) {

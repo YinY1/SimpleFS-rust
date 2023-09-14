@@ -6,7 +6,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use simple_fs::SFS;
 
+use crate::block::sync_all_block_cache;
 use crate::inode::FileMode;
+use crate::simple_fs::create_fs_file;
 
 mod bitmap;
 mod block;
@@ -25,17 +27,15 @@ const SOCKET_ADDR: &str = "127.0.0.1:8080";
 #[tokio::main]
 async fn main() -> io::Result<()> {
     env_logger::init();
-    tokio::task::spawn_blocking(|| {
-        Box::pin({
-            async {
-                let fs = Arc::clone(&SFS);
-                let mut w = fs.write().await;
-                w.init().await;
-            }
-        })
-    })
-    .await
-    .unwrap();
+
+    let fs = Arc::clone(&SFS);
+    let mut w = fs.write().await;
+    if w.init().await.is_err() {
+        create_fs_file();
+        w.force_clear().await;
+        info!("SFS init successfully");
+    };
+    drop(w);
 
     let listener = TcpListener::bind(SOCKET_ADDR).await?;
     info!("server listening to {}", SOCKET_ADDR);
@@ -57,7 +57,7 @@ async fn main() -> io::Result<()> {
                     }
                 };
                 let bash = String::from_utf8_lossy(&buffer);
-                if bash.trim() == "bash ok" {
+                if bash.trim().replace('\0', "") == "bash ok" {
                     let fs = Arc::clone(&SFS);
                     let cwd = fs.read().await.cwd.clone();
                     // 1. 将cwd发送给client
@@ -71,6 +71,7 @@ async fn main() -> io::Result<()> {
                 }
 
                 // 2.1 接受client的指令
+                buffer = [0; 1024];
                 let _ = match socket.read(&mut buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
@@ -80,8 +81,9 @@ async fn main() -> io::Result<()> {
                     }
                 };
                 let command = String::from_utf8_lossy(&buffer);
-                if command.trim() == "EXIT" {
+                if command.trim().replace('\0', "") == "EXIT" {
                     println!("socket {:?} exit", addr);
+                    let _ = sync_all_block_cache().await;
                     return;
                 }
                 let args: Vec<&str> = command.split_whitespace().collect();
@@ -104,14 +106,15 @@ async fn main() -> io::Result<()> {
 
 #[allow(unused)]
 async fn do_command(
-    args: Vec<&str>,
+    mut args: Vec<&str>,
     socket: &mut TcpStream,
 ) -> Result<Option<String>, std::io::Error> {
-    if args[0] == "ls" {
-        if args.last().unwrap() == &"/s" {
+    let args: Vec<String> = args.iter().map(|&arg| arg.replace('\0', "")).collect();
+    if args[0].as_str() == "ls" {
+        if args.last().unwrap() == "/s" {
             match args.len() {
                 2 => syscall::ls(true).await,
-                3 => syscall::ls_dir(args[1], true).await,
+                3 => syscall::ls_dir(&args[1], true).await,
                 _ => Err(error_arg()),
             }
         } else {
@@ -123,14 +126,14 @@ async fn do_command(
         }
     } else {
         match args.len() {
-            1 => match args[0] {
+            1 => match args[0].as_str() {
                 "info" => syscall::info().await,
                 "check" => syscall::check().await.map(|_| None),
                 _ => Err(error_arg()),
             },
             2 => {
-                let name = args[1];
-                match args[0] {
+                let name = args[1].as_str();
+                match args[0].as_str() {
                     "cd" => syscall::cd(name).await.map(|_| None),
                     "md" => syscall::mkdir(name).await.map(|_| None),
                     // 对于rd 要等待client确认是否删除
@@ -144,8 +147,10 @@ async fn do_command(
                     _ => Err(error_arg()),
                 }
             }
-            3 => match args[0] {
-                "copy" => syscall::copy(args[1], args[2], socket).await.map(|_| None),
+            3 => match args[0].as_str() {
+                "copy" => syscall::copy(args[1].as_str(), args[2].as_str(), socket)
+                    .await
+                    .map(|_| None),
                 _ => Err(error_arg()),
             },
             _ => Err(error_arg()),

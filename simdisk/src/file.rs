@@ -56,7 +56,7 @@ pub async fn create_file(
     let blocks = get_all_blocks(&inode).await?;
     assert!(blocks.len() >= input_vecs.len());
     for (i, content) in input_vecs.into_iter().enumerate() {
-        write_block(&content, blocks[i].1 as usize, 0).await;
+        write_block(&content, blocks[i].1 as usize, 0).await?;
     }
     // 将目录项写入目录中
     // 为当前父节点持有的block添加一个目录项

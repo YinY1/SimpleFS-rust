@@ -146,7 +146,7 @@ pub async fn copy(
 
 #[allow(unused)]
 pub async fn check() -> Result<(), Error> {
-    SFS.write().await.check();
+    SFS.write().await.check().await;
     Ok(())
 }
 
@@ -189,7 +189,7 @@ where
                 w.current_inode = forward_inode;
             }
             if need_sync {
-                sync_all_block_cache().await;
+                sync_all_block_cache().await?;
             }
             Ok(ok)
         }

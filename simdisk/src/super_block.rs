@@ -1,5 +1,5 @@
 use crate::{
-    block::{get_block_buffer, write_block, deserialize},
+    block::{deserialize, get_block_buffer, write_block},
     simple_fs::*,
 };
 use log::trace;
@@ -36,7 +36,7 @@ pub struct SuperBlock {
 #[allow(unused)]
 impl SuperBlock {
     /// 初始化超级块
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         trace!("init super block");
         let sb = Self {
             fs_size: FS_SIZE / BLOCK_SIZE,
@@ -50,13 +50,13 @@ impl SuperBlock {
             data_bitmap_size: DATA_BITMAP_NUM,
             magic: MAGIC,
         };
-        sb.cache();
+        sb.cache().await;
         sb
     }
 
-    pub fn cache(&self) {
+    pub async fn cache(&self) {
         trace!("write super block to cache");
-        write_block(self, 0, 0);
+        write_block(self, 0, 0).await;
     }
 
     pub async fn read() -> Result<Self, Error> {

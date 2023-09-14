@@ -29,7 +29,6 @@ pub async fn create_file(
     if is_copy {
         inputs = content.to_owned();
     } else {
-        // TODO socket receiv
         // 从client 读取文件内容
         let mut input_buffer = [0; 1024]; // TODO 循环读缓冲区直到读完
         let n = socket.read(&mut input_buffer).await?;

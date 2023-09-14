@@ -551,6 +551,7 @@ pub async fn sync_all_block_cache() -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut blk_w = blk.write().await;
     blk_w.sync_and_clear_cache().await?;
+    drop(blk_w);
     // 重新读取已写入的信息
     let fs = Arc::clone(&SFS);
     let mut w = fs.write().await;

@@ -248,7 +248,8 @@ pub async fn make_directory(name: &str, parent_inode: &mut Inode) -> Result<(), 
         return Err(Error::new(ErrorKind::AlreadyExists, err));
     }
     // 为新生成的目录项 申请inode
-    let new_node = Inode::alloc_dir(parent_inode).await?;
+    let mut new_node = Inode::alloc_dir(parent_inode).await?;
+    new_node.linkat().await;
     // 录入新的到的inode id
     dirent.inode_id = new_node.inode_id;
     // 为当前父节点持有的block添加一个目录项

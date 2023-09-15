@@ -5,10 +5,11 @@ use std::{
     sync::Arc,
 };
 
+use async_recursion::async_recursion;
 use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 
@@ -77,22 +78,22 @@ impl DirEntry {
         Self::new(filename, extension, is_dir, 0)
     }
 
-    pub fn create_dot(inode: &mut Inode) -> Self {
+    pub async fn create_dot(inode: &mut Inode) -> Self {
         let dirent = Self::new(".", "", true, inode.inode_id).unwrap();
-        inode.linkat();
+        inode.linkat().await;
         dirent
     }
 
-    pub fn create_dot_dot(inode: &mut Inode) -> Self {
+    pub async fn create_dot_dot(inode: &mut Inode) -> Self {
         let dirent = Self::new("..", "", true, inode.inode_id).unwrap();
-        inode.linkat();
+        inode.linkat().await;
         dirent
     }
 
-    pub fn create_diretory(current_inode: &mut Inode, parent_inode: &mut Inode) -> (Self, Self) {
+    pub async fn create_diretory(current_inode: &mut Inode, parent_inode: &mut Inode) -> (Self, Self) {
         (
-            Self::create_dot(current_inode),
-            Self::create_dot_dot(parent_inode),
+            Self::create_dot(current_inode).await,
+            Self::create_dot_dot(parent_inode).await,
         )
     }
 
@@ -166,6 +167,7 @@ impl DirEntry {
     }
 
     /// 递归清空该目录下的所有inode和dirent
+    #[async_recursion]
     pub async fn clear_dir(&mut self) {
         //0. 收集目录下的inode并分类
         let inode = Inode::read(self.inode_id as usize).await.unwrap();
@@ -184,7 +186,7 @@ impl DirEntry {
                 InodeType::Diretory => {
                     // 单独为上级目录unlinkat
                     if dirent.is_parent() {
-                        inode_inside.unlinkat();
+                        inode_inside.unlinkat().await;
                     }
                     // 不要把特殊目录放进去,以免重复删除
                     if !dirent.is_special() {
@@ -202,19 +204,26 @@ impl DirEntry {
 
         //1.1 清除文件inode及其所占有的所有区块
         for fnode in &mut file_inodes {
-            fnode.dealloc();
+            fnode.dealloc().await;
         }
+        trace!("dealloc file nodes ok");
 
         //1.2.1 递归清空非特殊目录（此时dirents不包含特殊目录）
         for (_, _, dir) in &mut dirents {
-            dir.clear_dir();
+            let fname = dir.filename;
+            let name = String::from_utf8_lossy(&fname);
+            trace!("try clear {}", name);
+            dir.clear_dir().await;
+            trace!("clear {} ok", name);
         }
 
         //1.2.2 清除目录inode，同时unlinkat,(因为包含了特殊目录指向的inode，所以父级inode的nlink会-1)
         for dnode in &mut dir_inodes {
             // 注意不要把父级inode给dealloc了
-            dnode.dealloc();
+            dnode.dealloc().await;
+            trace!("dealloc {} ok", dnode.inode_id);
         }
+        trace!("clear ok");
     }
 
     pub fn is_current(&self) -> bool {
@@ -254,6 +263,7 @@ pub async fn make_directory(name: &str, parent_inode: &mut Inode) -> Result<(), 
     dirent.inode_id = new_node.inode_id;
     // 为当前父节点持有的block添加一个目录项
     insert_object(&dirent, parent_inode).await?;
+    trace!("make dir ok");
     Ok(())
 }
 
@@ -280,29 +290,32 @@ pub async fn remove_directory(
             for (_, _, dirent) in dirs {
                 if !dirent.is_special() {
                     // send指令
-                    socket.write_all("CONFIRM COMMAND".as_bytes()).await?;
-                    let mut answer = String::new();
-                    let mut io_reader = tokio::io::BufReader::new(tokio::io::stdin());
-                    let n = io_reader.read_line(&mut answer).await?;
+                    socket.write_all(shell::COMMAND_CONFIRM.as_bytes()).await?;
+                    // 2.ex2 从client 等待确认指令
+                    let mut response = [0; 8];
+                    let n = socket.read(&mut response).await?;
                     if n == 0 {
                         return Err(Error::new(
                             ErrorKind::ConnectionAborted,
                             "cannot read from client",
                         ));
                     }
-                    answer = answer.trim().to_string();
-                    if answer == "y" || answer == "Y" {
-                        break;
-                    } else {
-                        println!("remove cancel");
-                        return Ok(());
+                    let response = String::from_utf8_lossy(&response).replace('\0', "");
+                    match response.trim() {
+                        "y" | "Y" => break,
+                        _ => {
+                            info!("remove cancel, input {}", response);
+                            return Ok(());
+                        }
                     }
                 }
             }
+            debug!("answer is YES, do remove");
             remove_object(&dirent, block_id as usize, level, parent_inode).await?;
             dirent.clear_dir().await;
             // 最后dealloc一下目录自己的inode
             dir_inode.dealloc().await;
+            trace!("remove dir ok");
             Ok(())
         }
         Err(err) => Err(err),
@@ -314,8 +327,9 @@ pub async fn cd(path: &str) -> Result<(), Error> {
     // 是根目录直接返回
     let fs = Arc::clone(&SFS);
     if path == "~" {
+        let root = fs.read().await.root_inode.clone();
         let mut w = fs.write().await;
-        w.current_inode = fs.read().await.root_inode.clone();
+        w.current_inode = root;
         w.cwd = String::from("~");
         return Ok(());
     }

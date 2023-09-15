@@ -14,14 +14,16 @@ use crate::{
 pub async fn info() -> Result<Option<String>, Error> {
     let fs = Arc::clone(&SFS);
     let res = fs.read().await.info().await;
+    trace!("finished cmd: info");
     Ok(Some(res))
 }
 
 #[allow(unused)]
 pub async fn ls(detail: bool) -> Result<Option<String>, Error> {
     let fs = Arc::clone(&SFS);
-    let res = fs.read().await.current_inode.ls(detail).await;
-    Ok(Some(res))
+    let infos = fs.read().await.current_inode.ls(detail).await;
+    trace!("finished cmd: ls");
+    Ok(Some(infos))
 }
 
 #[allow(unused)]
@@ -33,7 +35,8 @@ pub async fn ls_dir(path: &str, detail: bool) -> Result<Option<String>, Error> {
             Ok(())
         })
     })
-    .await;
+    .await?;
+    trace!("finished cmd: ls_dir");
     Ok(infos)
 }
 
@@ -46,7 +49,9 @@ pub async fn mkdir(name: &str) -> Result<(), Error> {
             dirent::make_directory(n, &mut w.current_inode).await
         })
     })
-    .await
+    .await?;
+    trace!("finished cmd: mkdir");
+    Ok(())
 }
 
 #[allow(unused)]
@@ -58,12 +63,16 @@ pub async fn rmdir(name: &str, socket: &mut TcpStream) -> Result<(), Error> {
             dirent::remove_directory(n, &mut w.current_inode, socket).await
         })
     })
-    .await
+    .await?;
+    trace!("finished cmd: mkdir");
+    Ok(())
 }
 
 #[allow(unused)]
 pub async fn cd(name: &str) -> Result<(), Error> {
-    dirent::cd(name).await
+    dirent::cd(name).await?;
+    trace!("finished cmd: cd");
+    Ok(())
 }
 
 #[allow(unused)]
@@ -75,7 +84,9 @@ pub async fn new_file(name: &str, mode: FileMode, socket: &mut TcpStream) -> Res
             file::create_file(n, mode, &mut w.current_inode, false, "", socket).await
         })
     })
-    .await
+    .await?;
+    trace!("finished cmd: newfile");
+    Ok(())
 }
 
 #[allow(unused)]
@@ -87,21 +98,23 @@ pub async fn del(name: &str) -> Result<(), Error> {
             file::remove_file(n, &mut w.current_inode).await
         })
     })
-    .await
+    .await?;
+    trace!("finished cmd: del [{}]", name);
+    Ok(())
 }
 
 #[allow(unused)]
 pub async fn cat(name: &str) -> Result<Option<String>, Error> {
-    Ok(Some(
-        temp_cd_and_do(name, false, |n| {
-            Box::pin(async move {
-                let fs = Arc::clone(&SFS);
-                let r = fs.read().await;
-                file::open_file(n, &r.current_inode).await
-            })
+    let content = temp_cd_and_do(name, false, |n| {
+        Box::pin(async move {
+            let fs = Arc::clone(&SFS);
+            let r = fs.read().await;
+            file::open_file(n, &r.current_inode).await
         })
-        .await?,
-    ))
+    })
+    .await?;
+    trace!("finished cmd: cat [{}]", name);
+    Ok(Some(content))
 }
 
 #[allow(unused)]
@@ -126,6 +139,7 @@ pub async fn copy(
         })
         .await;
     }
+    trace!("finished get source contents");
     temp_cd_and_do(target_path, true, |name| {
         Box::pin(async move {
             let fs = Arc::clone(&SFS);
@@ -141,12 +155,15 @@ pub async fn copy(
             .await
         })
     })
-    .await
+    .await?;
+    trace!("finished cmd: copy [{}] to [{}]", source_path, target_path);
+    Ok(())
 }
 
 #[allow(unused)]
 pub async fn check() -> Result<(), Error> {
     SFS.write().await.check().await;
+    trace!("finished cmd: check");
     Ok(())
 }
 

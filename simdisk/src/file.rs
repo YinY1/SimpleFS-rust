@@ -1,9 +1,12 @@
 use std::io::{Error, ErrorKind};
 
-use tokio::{io::AsyncReadExt, net::TcpStream};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 use crate::{
-    block::{deserialize, get_all_blocks, insert_object, remove_object, write_block},
+    block::{get_all_blocks, insert_object, remove_object, write_file_content_to_block},
     dirent::{self, DirEntry},
     inode::{FileMode, Inode, InodeType, MAX_FILE_SIZE},
     simple_fs::BLOCK_SIZE,
@@ -29,7 +32,11 @@ pub async fn create_file(
     if is_copy {
         inputs = content.to_owned();
     } else {
-        // 从client 读取文件内容
+        // 2.ex1.1 向client告知需要输入内容
+        socket
+            .write_all(shell::INPUT_FILE_CONTENT.as_bytes())
+            .await?;
+        // 2.ex1.2 client 读取文件内容
         let mut input_buffer = [0; 1024]; // TODO 循环读缓冲区直到读完
         let n = socket.read(&mut input_buffer).await?;
         if n == 0 {
@@ -55,7 +62,7 @@ pub async fn create_file(
     let blocks = get_all_blocks(&inode).await?;
     assert!(blocks.len() >= input_vecs.len());
     for (i, content) in input_vecs.into_iter().enumerate() {
-        write_block(&content, blocks[i].1 as usize, 0).await?;
+        write_file_content_to_block(content, blocks[i].1 as usize).await?;
     }
     // 将目录项写入目录中
     // 为当前父节点持有的block添加一个目录项
@@ -97,7 +104,7 @@ pub async fn open_file(name: &str, parent_inode: &Inode) -> Result<String, Error
         let blocks = get_all_blocks(&inode).await?;
         let mut content = String::new();
         for (_, _, block) in blocks {
-            let string: String = deserialize(&block)?;
+            let string = String::from_utf8_lossy(&block).to_string();
             content.push_str(&string);
         }
         Ok(content)

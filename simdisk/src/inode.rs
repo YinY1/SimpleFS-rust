@@ -89,7 +89,7 @@ impl Inode {
         root.alloc_data_blocks().await.unwrap();
         assert_eq!(DATA_BLOCK, root.addr[0] as usize);
 
-        let current_dirent = DirEntry::create_dot(&mut root);
+        let current_dirent = DirEntry::create_dot(&mut root).await;
         let _ = write_block(&current_dirent, root.addr[0] as usize, 0).await;
         root.cache().await;
         root
@@ -120,7 +120,7 @@ impl Inode {
 
         if let InodeType::Diretory = inode_type {
             // 申请两个目录项并存放到块中
-            let dirs = DirEntry::create_diretory(&mut inode, parent_inode);
+            let dirs = DirEntry::create_diretory(&mut inode, parent_inode).await;
             let _ = write_block(&dirs, inode.addr[0] as usize, 0).await;
         }
         // 写入缓存块
@@ -342,6 +342,7 @@ impl Inode {
             dir_infos.push_str(&name);
             dir_infos.push('\n');
         }
+        trace!("ls ok");
         dir_infos
     }
 }

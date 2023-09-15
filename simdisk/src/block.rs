@@ -1,4 +1,3 @@
-use log::{error, info, trace};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -55,7 +54,7 @@ impl Block {
         self.modified = true;
     }
 
-    pub async fn sync_block(&mut self) -> Result<(), Error> {
+    async fn sync_block(&mut self) -> Result<(), Error> {
         if self.modified {
             if let Ok(mut file) = tokio::fs::OpenOptions::new()
                 .write(true)
@@ -63,7 +62,7 @@ impl Block {
                 .await
             {
                 let buf = self.bytes;
-                info!("drop block{}", self.block_id);
+                trace!("drop block {}", self.block_id);
                 let offset = self.block_id * BLOCK_SIZE;
                 let pos = tokio::io::SeekFrom::Start(offset as u64);
                 file.seek(pos)
@@ -110,7 +109,6 @@ pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
     let mut w = blk.write().await;
 
     if w.block_cache.contains(&block) {
-        trace!("block {} already in cache", block_id);
         return Ok(());
     }
 
@@ -174,6 +172,26 @@ pub async fn get_block_buffer(
         }
     }
     Err(Error::new(ErrorKind::Other, "unreachable"))
+}
+
+pub async fn write_file_content_to_block(content: String, block_id: usize) -> Result<(), Error> {
+    assert!(BLOCK_SIZE >= content.len());
+    trace!("write block{}", block_id);
+    // 当块不在缓存中时 读入缓存
+    read_block_to_cache(block_id).await?;
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut bcm = blk.write().await;
+
+    for block in &mut bcm.block_cache {
+        if block.block_id == block_id {
+            block.modify_bytes(|bytes_arr| {
+                let end = content.len();
+                bytes_arr[..end].clone_from_slice(content.as_bytes());
+            });
+            return Ok(());
+        }
+    }
+    panic!("unreachable write_block")
 }
 
 /// 将`object`序列化并写入指定的`block_id`中，
@@ -437,6 +455,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
         return Ok(());
     }
     dealloc_data_bit(block_id).await;
+    trace!("dealloc data bit ok");
 
     match level {
         BlockLevel::Direct => {
@@ -496,6 +515,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
             inode.set_second_id(0);
         }
     }
+    trace!("remove obj ok");
     Ok(())
 }
 
@@ -556,6 +576,7 @@ pub async fn sync_all_block_cache() -> Result<(), Error> {
     let fs = Arc::clone(&SFS);
     let mut w = fs.write().await;
     w.update().await;
+    trace!("sync all blocks ok");
     Ok(())
 }
 

@@ -113,10 +113,11 @@ pub async fn open_file(name: &str, parent_inode: &Inode) -> Result<String, Error
 
 /// 将input string按块大小分割成数组
 fn split_inputs(inputs: String) -> Vec<String> {
-    inputs
-        .chars()
-        .collect::<Vec<char>>()
-        .chunks(BLOCK_SIZE)
-        .map(|chunk| chunk.iter().collect::<String>())
-        .collect()
+    let ch = inputs.as_bytes().chunks(BLOCK_SIZE);
+    let mut result = Vec::new();
+    for chunk in ch {
+        let chunk_str = std::str::from_utf8(chunk).expect("Invalid UTF-8 sequence");
+        result.push(chunk_str.to_string());
+    }
+    result
 }

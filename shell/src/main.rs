@@ -11,7 +11,7 @@ extern crate log;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     pretty_env_logger::formatted_builder()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Info)
         .init();
 
     let mut stream = TcpStream::connect(SOCKET_ADDR).await?;

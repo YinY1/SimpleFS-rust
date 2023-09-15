@@ -28,7 +28,7 @@ extern crate log;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     pretty_env_logger::formatted_builder()
-        .filter_level(log::LevelFilter::Trace)
+        .filter_level(log::LevelFilter::Info)
         .init();
 
     let fs = Arc::clone(&SFS);
@@ -129,8 +129,8 @@ async fn do_command(
         .map(|&arg| arg.replace('\0', "").trim().to_string())
         .collect();
     info!(
-        "received args: '{}' from socket: {:?}",
-        args.concat(),
+        "received args: '{:?}' from socket: {:?}",
+        args,
         socket.peer_addr().unwrap()
     );
     if args[0].as_str() == "ls" {
@@ -143,7 +143,7 @@ async fn do_command(
         } else {
             match args.len() {
                 1 => syscall::ls(false).await,
-                2 => syscall::ls(true).await,
+                2 => syscall::ls_dir(&args[1], false).await,
                 _ => Err(error_arg()),
             }
         }

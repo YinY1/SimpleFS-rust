@@ -82,7 +82,7 @@ impl SampleFileSystem {
         let infos = vec![
             format!("-----------------------\n"),
             format!("{:#?}\n", self.super_block),
-            format!("{:#?}\n", self.root_inode),
+            format!("{:#?}\n", self.current_inode),
             format!("[Inode  used] {}\n", alloced_inodes),
             format!("[Inode valid] {}\n", valid_inodes),
             format!("[Disk   used] {} KB\n", alloced),

@@ -64,7 +64,7 @@ pub async fn rmdir(name: &str, socket: &mut TcpStream) -> Result<(), Error> {
         })
     })
     .await?;
-    trace!("finished cmd: mkdir");
+    trace!("finished cmd: rmdir");
     Ok(())
 }
 

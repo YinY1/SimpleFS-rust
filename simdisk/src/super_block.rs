@@ -1,8 +1,7 @@
 use crate::{
     block::{deserialize, get_block_buffer, write_block},
-    simple_fs::*,
+    fs_constants::*,
 };
-use log::trace;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, io::Error};
 
@@ -40,13 +39,13 @@ impl SuperBlock {
         trace!("init super block");
         let sb = Self {
             fs_size: FS_SIZE / BLOCK_SIZE,
-            first_inode: INODE_BLOCK,
-            inode_area_size: INODE_NUM,
-            first_block_of_inode_bitmap: INODE_BITMAP_BLOCK,
+            first_inode: INODE_START_BLOCK,
+            inode_area_size: INODE_BLOCK_NUM,
+            first_block_of_inode_bitmap: INODE_BITMAP_START_BLOCK,
             inode_bitmap_size: INODE_BITMAP_NUM,
-            data_size: FS_SIZE - DATA_BLOCK,
-            first_data_block: DATA_BLOCK,
-            first_block_of_data_bitmap: DATA_BITMAP_BLOCK,
+            data_size: FS_SIZE - DATA_START_BLOCK,
+            first_data_block: DATA_START_BLOCK,
+            first_block_of_data_bitmap: DATA_BITMAP_START_BLOCK,
             data_bitmap_size: DATA_BITMAP_NUM,
             magic: MAGIC,
         };

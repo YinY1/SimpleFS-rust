@@ -6,7 +6,6 @@ use std::{
 };
 
 use async_recursion::async_recursion;
-use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -17,13 +16,10 @@ use crate::{
     block::{
         self, deserialize, get_all_valid_blocks, get_block_buffer, insert_object, remove_object,
     },
-    inode::{Inode, InodeType, DIRENTRY_SIZE},
-    simple_fs::{BLOCK_SIZE, SFS},
+    fs_constants::*,
+    inode::{Inode, InodeType},
+    simple_fs::SFS,
 };
-
-// 文件名和扩展名长度限制（字节）
-const NAME_LENGTH_LIMIT: usize = 10;
-const EXTENSION_LENGTH_LIMIT: usize = 3;
 
 #[allow(unused)]
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -90,7 +86,10 @@ impl DirEntry {
         dirent
     }
 
-    pub async fn create_diretory(current_inode: &mut Inode, parent_inode: &mut Inode) -> (Self, Self) {
+    pub async fn create_diretory(
+        current_inode: &mut Inode,
+        parent_inode: &mut Inode,
+    ) -> (Self, Self) {
         (
             Self::create_dot(current_inode).await,
             Self::create_dot_dot(parent_inode).await,

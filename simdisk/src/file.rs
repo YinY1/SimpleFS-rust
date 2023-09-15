@@ -8,8 +8,8 @@ use tokio::{
 use crate::{
     block::{get_all_blocks, insert_object, remove_object, write_file_content_to_block},
     dirent::{self, DirEntry},
-    inode::{FileMode, Inode, InodeType, MAX_FILE_SIZE},
-    simple_fs::BLOCK_SIZE,
+    fs_constants::*,
+    inode::{FileMode, Inode, InodeType},
 };
 
 pub async fn create_file(

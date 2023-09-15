@@ -14,6 +14,7 @@ mod bitmap;
 mod block;
 mod dirent;
 mod file;
+mod fs_constants;
 mod inode;
 mod simple_fs;
 mod super_block;
@@ -133,7 +134,7 @@ async fn do_command(
         args,
         socket.peer_addr().unwrap()
     );
-    if args[0].as_str() == "ls" {
+    if args[0].as_str() == "dir" {
         if args.last().unwrap() == "/s" {
             match args.len() {
                 2 => syscall::ls(true).await,

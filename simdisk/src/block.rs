@@ -14,24 +14,12 @@ use tokio::{
 
 use crate::{
     bitmap::{alloc_bit, dealloc_data_bit, BitmapType},
+    fs_constants::*,
     inode::Inode,
-    simple_fs::{BLOCK_SIZE, FS_FILE_NAME, SFS},
+    simple_fs::SFS,
 };
 
 pub type BlockIDType = u32;
-
-const BLOCK_CACHE_LIMIT: usize = 1024; // 块缓冲区大小（块数量）
-
-pub const DIRECT_BLOCK_NUM: usize = 8; // 直接块数
-pub const FIRST_INDIRECT_NUM: usize = 1; // 一级间接块数
-pub const SECOND_INDIRECT_NUM: usize = 1; // 二级间接块数
-pub const ADDR_TOTAL_SIZE: usize = DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM + SECOND_INDIRECT_NUM;
-
-pub const BLOCK_ADDR_SIZE: usize = size_of::<BlockIDType>(); // 块地址大小
-pub const INDIRECT_ADDR_NUM: usize = BLOCK_SIZE / BLOCK_ADDR_SIZE; // 间接块可以存下的块地址的数量pub
-
-pub const FISRT_MAX: usize = FIRST_INDIRECT_NUM * INDIRECT_ADDR_NUM; //一级间接块最大可表示的块数量
-pub const SECOND_MAX: usize = (SECOND_INDIRECT_NUM * INDIRECT_ADDR_NUM) * FISRT_MAX; //二级间接块最大可表示的块数量
 #[derive(Clone, Debug)]
 pub struct Block {
     pub block_id: usize,

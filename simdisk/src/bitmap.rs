@@ -3,19 +3,17 @@ use std::{
     sync::Arc,
 };
 
-use log::trace;
-
 use crate::{
     block::{clear_block, get_block_buffer, read_block_to_cache, BLOCK_CACHE_MANAGER},
-    simple_fs::*,
+    fs_constants::*,
 };
 
 /// 获取一个空闲bit的位置，如果有，则bit置1并返回位置
 /// 这个位置是从当前所属位图开始计算，即当前所属位图的第K个bit
 pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
     let (block_nums, block_start_id) = match bitmap_type {
-        BitmapType::Inode => (INODE_BITMAP_NUM, INODE_BITMAP_BLOCK),
-        BitmapType::Data => (DATA_BITMAP_NUM, DATA_BITMAP_BLOCK),
+        BitmapType::Inode => (INODE_BITMAP_NUM, INODE_BITMAP_START_BLOCK),
+        BitmapType::Data => (DATA_BITMAP_NUM, DATA_BITMAP_START_BLOCK),
     };
 
     // 遍历位图的每个块
@@ -61,12 +59,12 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
 }
 
 pub async fn dealloc_inode_bit(inode_id: usize) -> bool {
-    dealloc_bit(INODE_BITMAP_BLOCK, inode_id / 8, inode_id).await
+    dealloc_bit(INODE_BITMAP_START_BLOCK, inode_id / 8, inode_id).await
 }
 
 /// 在对应的位图中dealloc 指定block所占用的bit, 同时清空该block
 pub async fn dealloc_data_bit(block_id: usize) -> bool {
-    let (bit_block_start_id, block_start_id) = (DATA_BITMAP_BLOCK, DATA_BLOCK);
+    let (bit_block_start_id, block_start_id) = (DATA_BITMAP_START_BLOCK, DATA_START_BLOCK);
     //对应位图（包括所有的块）中的总共第K个bit（从左到右）
     let bit_id = block_id - block_start_id;
     //对应位图（包括所有的块）中的总共第K个byte（从左到右）
@@ -113,8 +111,8 @@ async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usi
 
 async fn count_bits(bitmap_type: BitmapType) -> usize {
     let (start_id, block_nums) = match bitmap_type {
-        BitmapType::Inode => (INODE_BITMAP_BLOCK, INODE_BITMAP_NUM),
-        BitmapType::Data => (DATA_BITMAP_BLOCK, DATA_BITMAP_NUM),
+        BitmapType::Inode => (INODE_BITMAP_START_BLOCK, INODE_BITMAP_NUM),
+        BitmapType::Data => (DATA_BITMAP_START_BLOCK, DATA_BITMAP_NUM),
     };
     let mut cnt = 0;
     for i in 0..block_nums {
@@ -132,7 +130,7 @@ async fn count_bits(bitmap_type: BitmapType) -> usize {
 /// 统计申请了多少inode,第一个返回值为已申请，第二个返回值为未申请
 pub async fn count_inodes() -> (usize, usize) {
     let alloced = count_bits(BitmapType::Inode).await;
-    (alloced, INODE_NUM - alloced)
+    (alloced, 1024 - alloced)
 }
 
 #[allow(unused)]
@@ -145,7 +143,7 @@ pub async fn count_data_blocks() -> (usize, usize) {
 #[allow(unused)]
 /// 统计空闲inode数
 pub async fn count_valid_inodes() -> usize {
-    INODE_NUM - count_bits(BitmapType::Inode).await
+    1024- count_bits(BitmapType::Inode).await
 }
 
 #[allow(unused)]

@@ -1,41 +1,30 @@
 use bitflags::bitflags;
 
-use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::min,
     io::{Error, ErrorKind},
-    mem::size_of,
     time::SystemTime,
 };
 
 use crate::{
     bitmap::{self, alloc_bit, dealloc_data_bit, dealloc_inode_bit, BitmapType},
-    block::{
-        deserialize, get_block_buffer, write_block, BlockIDType, ADDR_TOTAL_SIZE, BLOCK_ADDR_SIZE,
-        DIRECT_BLOCK_NUM, FIRST_INDIRECT_NUM, FISRT_MAX, INDIRECT_ADDR_NUM, SECOND_MAX,
-    },
+    block::{deserialize, get_block_buffer, write_block, BlockIDType},
     dirent::DirEntry,
-    simple_fs::{BLOCK_SIZE, DATA_BLOCK, INODE_BLOCK},
+    fs_constants::*,
 };
-
-pub const INODE_SIZE: usize = size_of::<Inode>();
-pub const DIRENTRY_SIZE: usize = size_of::<DirEntry>();
-
-#[allow(unused)]
-pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX); //可表示文件的最大大小（字节）
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Inode {
     // 内存要对齐！
+    pub inode_id: u16, // inode 号
     pub inode_type: InodeType,
     mode: FileMode, // 权限
-    nlink: u8,
-    gid: u16,
-    pub inode_id: u16, // inode 号
-    uid: u16,
-    size: u32,
-    time_info: u64,
+    nlink: u8,      // 硬连接数
+    gid: u16,       // 组id
+    uid: u16,       // 用户id
+    size: u32,      // 文件大小
+    time_info: u64, // 时间戳
     // 8个直接，1个一级，一个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【地址】
     pub addr: [BlockIDType; ADDR_TOTAL_SIZE],
 }
@@ -87,7 +76,7 @@ impl Inode {
         };
         // 申请1个data block
         root.alloc_data_blocks().await.unwrap();
-        assert_eq!(DATA_BLOCK, root.addr[0] as usize);
+        assert_eq!(DATA_START_BLOCK, root.addr[0] as usize);
 
         let current_dirent = DirEntry::create_dot(&mut root).await;
         let _ = write_block(&current_dirent, root.addr[0] as usize, 0).await;
@@ -229,7 +218,7 @@ impl Inode {
         };
 
         let ty = BitmapType::Data;
-        let start = DATA_BLOCK as u32;
+        let start = DATA_START_BLOCK as u32;
         // 为直接块申请
         for i in 0..direct_nums {
             let block_id = alloc_bit(ty).await? + start;
@@ -287,7 +276,7 @@ impl Inode {
 
     /// 直接从block读取inode信息
     pub async fn read(inode_id: usize) -> Result<Self, Error> {
-        let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
+        let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
         let inode_pos = inode_id % 16;
         let start_byte = inode_pos * INODE_SIZE;
         let end_byte = start_byte + INODE_SIZE;
@@ -300,12 +289,12 @@ impl Inode {
     ///将inode写入缓存中
     pub async fn cache(&self) {
         let inode_id = self.inode_id as usize;
-        let block_id = inode_id / BLOCK_SIZE + INODE_BLOCK;
+        let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
         let inode_pos = inode_id % 16;
         let start_byte = inode_pos * INODE_SIZE;
 
         trace!("write inode {} to block {} cache\n", inode_id, block_id);
-        let _  = write_block(self, block_id, start_byte).await;
+        let _ = write_block(self, block_id, start_byte).await;
     }
 
     pub async fn linkat(&mut self) {

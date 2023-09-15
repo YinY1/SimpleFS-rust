@@ -10,33 +10,10 @@ use tokio::sync::RwLock;
 use crate::{
     bitmap::{count_data_blocks, count_inodes},
     block::BLOCK_CACHE_MANAGER,
+    fs_constants::*,
     inode::Inode,
     super_block::SuperBlock,
 };
-
-pub const FS_FILE_NAME: &str = "SAMPLE_FS";
-pub const MAGIC: usize = 0x2F02BA345D;
-// 设块大小为 1KB
-pub const BLOCK_SIZE: usize = 1024;
-// 文件系统大小为 100MB
-pub const FS_SIZE: usize = 100 * 1024 * 1024;
-// inode bitmap块数
-pub const INODE_BITMAP_NUM: usize = 1;
-// data bitmap块数
-pub const DATA_BITMAP_NUM: usize = 13;
-// inode 区块数
-pub const INODE_NUM: usize = 1024;
-// data 区块数 (<= bitmap bit数,因为系统限制，bitmap有冗余)
-pub const DATA_NUM: usize =
-    FS_SIZE / BLOCK_SIZE - INODE_NUM - DATA_BITMAP_NUM - INODE_BITMAP_NUM - 1;
-// inode bitmap起始块号
-pub const INODE_BITMAP_BLOCK: usize = INODE_BITMAP_NUM;
-// data bitmap起始块号
-pub const DATA_BITMAP_BLOCK: usize = INODE_BITMAP_BLOCK + INODE_BITMAP_NUM;
-// inode 区起始块号
-pub const INODE_BLOCK: usize = DATA_BITMAP_BLOCK + DATA_BITMAP_NUM;
-// data 区起始块号
-pub const DATA_BLOCK: usize = INODE_BLOCK + INODE_NUM;
 
 #[allow(unused)]
 #[derive(Default)]

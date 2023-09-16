@@ -10,7 +10,6 @@ use crate::{
 };
 
 /// 打印
-#[allow(unused)]
 pub async fn info() -> Result<Option<String>, Error> {
     let fs = Arc::clone(&SFS);
     let res = fs.read().await.info().await;
@@ -18,7 +17,6 @@ pub async fn info() -> Result<Option<String>, Error> {
     Ok(Some(res))
 }
 
-#[allow(unused)]
 pub async fn ls(detail: bool) -> Result<Option<String>, Error> {
     let fs = Arc::clone(&SFS);
     let infos = fs.read().await.current_inode.ls(detail).await;
@@ -26,7 +24,6 @@ pub async fn ls(detail: bool) -> Result<Option<String>, Error> {
     Ok(Some(infos))
 }
 
-#[allow(unused)]
 pub async fn ls_dir(path: &str, detail: bool) -> Result<Option<String>, Error> {
     let mut infos = None;
     temp_cd_and_do(path, false, |_| {
@@ -40,13 +37,13 @@ pub async fn ls_dir(path: &str, detail: bool) -> Result<Option<String>, Error> {
     Ok(infos)
 }
 
-#[allow(unused)]
 pub async fn mkdir(name: &str) -> Result<(), Error> {
     temp_cd_and_do(name, true, |n| {
         Box::pin(async move {
-            let mut fs = Arc::clone(&SFS);
-            let mut w = fs.write().await;
-            dirent::make_directory(n, &mut w.current_inode).await
+            let (gid, uid) = get_current_info().await;
+            let fs = Arc::clone(&SFS);
+            let mut fs_write_block = fs.write().await;
+            dirent::make_directory(n, &mut fs_write_block.current_inode, gid, uid).await
         })
     })
     .await?;
@@ -54,13 +51,13 @@ pub async fn mkdir(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn rmdir(name: &str, socket: &mut TcpStream) -> Result<(), Error> {
     temp_cd_and_do(name, true, |n| {
         Box::pin(async move {
+            let (gid, _) = get_current_info().await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
-            dirent::remove_directory(n, &mut w.current_inode, socket).await
+            dirent::remove_directory(n, &mut w.current_inode, socket, gid).await
         })
     })
     .await?;
@@ -68,20 +65,28 @@ pub async fn rmdir(name: &str, socket: &mut TcpStream) -> Result<(), Error> {
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn cd(name: &str) -> Result<(), Error> {
     dirent::cd(name).await?;
     trace!("finished cmd: cd");
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn new_file(name: &str, mode: FileMode, socket: &mut TcpStream) -> Result<(), Error> {
     temp_cd_and_do(name, true, |n| {
         Box::pin(async move {
+            let user_id = get_current_info().await;
             let fs = Arc::clone(&SFS);
-            let mut w = fs.write().await;
-            file::create_file(n, mode, &mut w.current_inode, false, "", socket).await
+            let mut fs_write_block = fs.write().await;
+            file::create_file(
+                n,
+                mode,
+                &mut fs_write_block.current_inode,
+                false,
+                "",
+                socket,
+                user_id,
+            )
+            .await
         })
     })
     .await?;
@@ -89,13 +94,13 @@ pub async fn new_file(name: &str, mode: FileMode, socket: &mut TcpStream) -> Res
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn del(name: &str) -> Result<(), Error> {
     temp_cd_and_do(name, true, |n| {
         Box::pin(async move {
+            let (gid, _) = get_current_info().await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
-            file::remove_file(n, &mut w.current_inode).await
+            file::remove_file(n, &mut w.current_inode, gid).await
         })
     })
     .await?;
@@ -103,7 +108,6 @@ pub async fn del(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn cat(name: &str) -> Result<Option<String>, Error> {
     let content = temp_cd_and_do(name, false, |n| {
         Box::pin(async move {
@@ -117,7 +121,6 @@ pub async fn cat(name: &str) -> Result<Option<String>, Error> {
     Ok(Some(content))
 }
 
-#[allow(unused)]
 pub async fn copy(
     source_path: &str,
     target_path: &str,
@@ -137,11 +140,12 @@ pub async fn copy(
                 Ok(())
             }) as _
         })
-        .await;
+        .await?;
     }
     trace!("finished get source contents");
     temp_cd_and_do(target_path, true, |name| {
         Box::pin(async move {
+            let user_id = get_current_info().await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
             file::create_file(
@@ -151,6 +155,7 @@ pub async fn copy(
                 true,
                 &content,
                 socket,
+                user_id,
             )
             .await
         })
@@ -160,7 +165,6 @@ pub async fn copy(
     Ok(())
 }
 
-#[allow(unused)]
 pub async fn check() -> Result<(), Error> {
     SFS.write().await.check().await;
     trace!("finished cmd: check");
@@ -212,4 +216,10 @@ where
         }
         Err(err) => Err(err),
     }
+}
+
+async fn get_current_info() -> (u16, u16) {
+    let fs = Arc::clone(&SFS);
+    let r = fs.read().await;
+    (r.current_user.gid, r.current_user.uid)
 }

@@ -13,6 +13,7 @@ use crate::{
     fs_constants::*,
     inode::Inode,
     super_block::SuperBlock,
+    user::{User, UserInfo},
 };
 
 #[allow(unused)]
@@ -22,6 +23,8 @@ pub struct SampleFileSystem {
     pub super_block: SuperBlock,
     pub current_inode: Inode,
     pub cwd: String,
+    pub user_infos: User,
+    pub current_user: UserInfo,
 }
 
 impl SampleFileSystem {
@@ -34,6 +37,8 @@ impl SampleFileSystem {
             root_inode,
             super_block: SuperBlock::read().await.unwrap(),
             cwd: String::from("~"),
+            user_infos: User::read().await.unwrap(),
+            current_user: UserInfo::default(),
         };
     }
     /// 只从文件系统读出可能更改的root inode信息
@@ -77,6 +82,9 @@ impl SampleFileSystem {
         // 创建root_inode
         let root_inode = Inode::new_root().await;
 
+        // 初始化用户信息
+        let user_info = User::init().await;
+
         let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
         let mut w = blk.write().await;
         w.sync_and_clear_cache().await.unwrap();
@@ -86,6 +94,8 @@ impl SampleFileSystem {
             root_inode,
             super_block,
             cwd: "~".to_string(),
+            user_infos: user_info,
+            current_user: UserInfo::default(),
         }
     }
 
@@ -93,6 +103,16 @@ impl SampleFileSystem {
     pub async fn check(&mut self) {
         let sp = SuperBlock::new().await;
         self.super_block = sp;
+    }
+
+    pub fn sign_in(&mut self, username: &str, password: &str) -> Result<(), Error> {
+        let info = self.user_infos.sign_in(username, password)?;
+        self.current_user = info;
+        Ok(())
+    }
+
+    pub async fn sign_up(&mut self, username: &str, password: &str) -> Result<(), Error> {
+        self.user_infos.sign_up(username, password).await
     }
 }
 

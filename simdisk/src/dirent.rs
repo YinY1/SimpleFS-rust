@@ -19,6 +19,7 @@ use crate::{
     fs_constants::*,
     inode::{Inode, InodeType},
     simple_fs::SFS,
+    user,
 };
 
 #[allow(unused)]
@@ -240,7 +241,12 @@ impl DirEntry {
 }
 
 /// 创建目录，失败时返回错误信息
-pub async fn make_directory(name: &str, parent_inode: &mut Inode) -> Result<(), Error> {
+pub async fn make_directory(
+    name: &str,
+    parent_inode: &mut Inode,
+    gid: u16,
+    uid: u16,
+) -> Result<(), Error> {
     if is_special_dir(name) {
         return Err(Error::new(
             ErrorKind::PermissionDenied,
@@ -256,7 +262,7 @@ pub async fn make_directory(name: &str, parent_inode: &mut Inode) -> Result<(), 
         return Err(Error::new(ErrorKind::AlreadyExists, err));
     }
     // 为新生成的目录项 申请inode
-    let mut new_node = Inode::alloc_dir(parent_inode).await?;
+    let mut new_node = Inode::alloc_dir(parent_inode, gid, uid).await?;
     new_node.linkat().await;
     // 录入新的到的inode id
     dirent.inode_id = new_node.inode_id;
@@ -270,6 +276,7 @@ pub async fn remove_directory(
     name: &str,
     parent_inode: &mut Inode,
     socket: &mut TcpStream,
+    gid: u16,
 ) -> Result<(), Error> {
     if is_special_dir(name) {
         return Err(Error::new(
@@ -285,6 +292,13 @@ pub async fn remove_directory(
         Ok((level, block_id)) => {
             //找到了同名目录项
             let mut dir_inode = Inode::read(dirent.inode_id as usize).await?;
+            // 不能越权
+            if !user::able_to_modify(gid, dir_inode.gid) {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Insufficient user permissions",
+                ));
+            }
             let dirs = DirEntry::get_all_dirent(&dir_inode).await?;
             for (_, _, dirent) in dirs {
                 if !dirent.is_special() {

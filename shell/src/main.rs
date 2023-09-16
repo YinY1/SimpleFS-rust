@@ -17,25 +17,70 @@ async fn main() -> io::Result<()> {
     let mut stream = TcpStream::connect(SOCKET_ADDR).await?;
     info!("Connected to server");
     let mut io_reader = io::BufReader::new(io::stdin());
-
+    let mut stream_buffer;
+    let mut is_login = false;
+    let mut username = String::new();
     loop {
-        let mut stream_buffer = [0; 1024];
-
         // 0. 发送信息请求bash
         let msg = BASH_REQUEST;
         stream.write_all(msg.as_bytes()).await?;
 
+        if !is_login {
+            // 0.0.1 获取登录请求
+            info!("waiting login request");
+            stream_buffer = [0; 1024];
+            let n = stream.read(&mut stream_buffer).await?;
+            if n == 0 {
+                error!("error reading answer from server");
+                return Err(Error::new(ErrorKind::NotConnected, ""));
+            }
+            let login_request = String::from_utf8_lossy(&stream_buffer[..n]);
+            if login_request != LOGIN_REQUEST {
+                error!("error login in server");
+                return Err(Error::new(ErrorKind::NotConnected, ""));
+            }
+            // 选择注册还是登录
+            info!("sign in or sign up");
+            let mut choice = String::new();
+            io_reader.read_line(&mut choice).await?;
+            match choice.trim() {
+                "sign in" => {
+                    if login(&mut username, &mut io_reader, &mut stream)
+                        .await
+                        .is_err()
+                    {
+                        continue;
+                    };
+                    is_login = true;
+                    // 1.0 请求cwd
+                    stream.write_all(CWD_REQUEST.as_bytes()).await?;
+                }
+                "sign up" => {
+                    if let Err(e) = regist(&mut io_reader, &mut stream).await {
+                        error!("{}", e);
+                    }
+                    continue;
+                }
+                "EXIT" => return Err(Error::new(ErrorKind::ConnectionReset, "")),
+                _ => {
+                    error!("invalid arg");
+                    return Err(Error::new(ErrorKind::InvalidInput, ""));
+                }
+            }
+        }
+
         // 1. 获取cwd
+        stream_buffer = [0; 1024];
         let len = stream.read(&mut stream_buffer).await?;
         if len == 0 {
             error!("error reading answer from server");
             return Err(Error::new(ErrorKind::NotConnected, ""));
         }
 
-        let recv_cwd = String::from_utf8_lossy(&stream_buffer);
+        let recv_cwd = String::from_utf8_lossy(&stream_buffer[..len]);
 
         println!("{}", recv_cwd.replace('\0', ""));
-        print!("$ ");
+        print!("({}) $ ", username.trim());
         std::io::stdout().flush()?;
 
         // 2.0 读取输入
@@ -103,6 +148,64 @@ async fn main() -> io::Result<()> {
     }
 }
 
+async fn login(
+    username: &mut String,
+    io_reader: &mut BufReader<Stdin>,
+    stream: &mut TcpStream,
+) -> io::Result<()> {
+    // 输入用户信息
+    info!("enter user");
+    username.clear();
+    io_reader.read_line(username).await?;
+    let mut password = String::new();
+    io_reader.read_line(&mut password).await?;
+
+    //  0.1.1 发送登录信息
+    stream
+        .write_all(["login ", username, " ", &password].concat().as_bytes())
+        .await?;
+    // 0.1.2 接受回传信息
+    let mut stream_buffer = [0; 1024];
+    let n = stream.read(&mut stream_buffer).await?;
+    if n == 0 {
+        error!("error reading answer from server");
+        return Err(Error::new(ErrorKind::NotConnected, ""));
+    }
+    let login_response = String::from_utf8_lossy(&stream_buffer[..n]);
+    if login_response != LOGIN_SUCCESS {
+        error!("login failed, {}", login_response);
+        return Err(Error::new(ErrorKind::PermissionDenied, login_response));
+    }
+    Ok(())
+}
+
+async fn regist(io_reader: &mut BufReader<Stdin>, stream: &mut TcpStream) -> io::Result<()> {
+    // 输入用户信息
+    info!("sign up user");
+    let mut username = String::new();
+    io_reader.read_line(&mut username).await?;
+    let mut password = String::new();
+    io_reader.read_line(&mut password).await?;
+
+    //  0.2.1 发送注册信息
+    stream
+        .write_all(["regist ", &username, " ", &password].concat().as_bytes())
+        .await?;
+    // 0.2.2 接受回传信息
+    let mut stream_buffer = [0; 1024];
+    let n = stream.read(&mut stream_buffer).await?;
+    if n == 0 {
+        error!("error reading answer from server");
+        return Err(Error::new(ErrorKind::NotConnected, ""));
+    }
+    let regist_response = String::from_utf8_lossy(&stream_buffer[..n]);
+    if regist_response != REGIST_SUCCESS {
+        error!("regist failed");
+        return Err(Error::new(ErrorKind::PermissionDenied, regist_response));
+    }
+    Ok(())
+}
+
 async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<String> {
     let mut line = String::new();
     let mut inputs = String::new();
@@ -114,6 +217,6 @@ async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<Strin
         inputs.push_str(&line);
         line.clear();
     }
-    debug!("get intputs: --->[{}]<---", inputs);
+    info!("get intputs: --->[{}]<---", inputs);
     Ok(inputs)
 }

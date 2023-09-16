@@ -21,7 +21,7 @@ pub struct Inode {
     pub inode_type: InodeType,
     mode: FileMode, // 权限
     nlink: u8,      // 硬连接数
-    gid: u16,       // 组id
+    pub gid: u16,       // 组id
     uid: u16,       // 用户id
     size: u32,      // 文件大小
     time_info: u64, // 时间戳
@@ -90,6 +90,8 @@ impl Inode {
         parent_inode: &mut Inode,
         mode: FileMode,
         size: u32,
+        gid: u16,
+        uid: u16,
     ) -> Result<Self, Error> {
         // 申请一个inode id
         let inode_id = alloc_bit(BitmapType::Inode).await? as u16;
@@ -98,8 +100,8 @@ impl Inode {
             mode,
             inode_id,
             nlink: 0,
-            uid: 0,
-            gid: 0,
+            uid,
+            gid,
             size,
             addr: [0; ADDR_TOTAL_SIZE],
             time_info: now_secs(),
@@ -117,8 +119,16 @@ impl Inode {
         Ok(inode)
     }
 
-    pub async fn alloc_dir(parent_inode: &mut Inode) -> Result<Self, Error> {
-        Self::alloc(InodeType::Diretory, parent_inode, FileMode::RDWR, 0).await
+    pub async fn alloc_dir(parent_inode: &mut Inode, gid: u16, uid: u16) -> Result<Self, Error> {
+        Self::alloc(
+            InodeType::Diretory,
+            parent_inode,
+            FileMode::RDWR,
+            0,
+            gid,
+            uid,
+        )
+        .await
     }
 
     /// 移除自身inode，从位图中dealloc，清空所拥有的数据（递归dealloc所拥有的block及其内容）
@@ -287,7 +297,7 @@ impl Inode {
     }
 
     ///将inode写入缓存中
-    pub async fn cache(&self) {
+    async fn cache(&self) {
         let inode_id = self.inode_id as usize;
         let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
         let inode_pos = inode_id % 16;

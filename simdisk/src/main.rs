@@ -19,6 +19,7 @@ mod inode;
 mod simple_fs;
 mod super_block;
 mod syscall;
+mod user;
 
 #[macro_use]
 extern crate lazy_static;
@@ -46,13 +47,15 @@ async fn main() -> io::Result<()> {
 
     loop {
         let (mut socket, addr) = listener.accept().await?;
+        info!("connected to {:?}", addr);
         // spawn一个线程
         tokio::spawn(async move {
             let mut buffer;
+            let mut is_login = false;
             loop {
                 buffer = [0; 1024];
-                // 0. 接受bash ok请求
-                let _ = match socket.read(&mut buffer).await {
+                // 0.0 接受bash ok请求
+                let n = match socket.read(&mut buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
                     Err(e) => {
@@ -60,17 +63,64 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                 };
-                let bash = String::from_utf8_lossy(&buffer);
-                if bash.replace('\0', "").trim() == BASH_REQUEST {
-                    let fs = Arc::clone(&SFS);
-                    let cwd = fs.read().await.cwd.clone();
-                    // 1. 将cwd发送给client
-                    if let Err(e) = socket.write_all(cwd.as_bytes()).await {
+                let bash = String::from_utf8_lossy(&buffer[..n]);
+                if bash.replace('\0', "").trim() != BASH_REQUEST {
+                    error!("wrong request for cwd, arg={}", bash);
+                    return;
+                }
+
+                if !is_login {
+                    // 0.0.1 请求登录
+                    info!("ask user login or regist");
+                    if let Err(e) = socket.write_all(LOGIN_REQUEST.as_bytes()).await {
                         error!("failed to write to socket; err = {:?}", e);
                         return;
                     }
-                } else {
-                    error!("wrong request for cwd, arg={}", bash);
+                    // 0.(1/2).1 等待client 发送信息
+                    buffer = [0; 1024];
+                    let n = match socket.read(&mut buffer).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!("failed to read from socket; err = {:?}", e);
+                            return;
+                        }
+                    };
+                    let response = String::from_utf8_lossy(&buffer[..n]);
+                    let res_vec: Vec<&str> = response.split_whitespace().collect();
+                    //  0.(1/2).2 验证信息并回信
+                    match res_vec[0].trim() {
+                        "login" => {
+                            if login(&res_vec[1..], &mut socket).await.is_err() {
+                                continue;
+                            }
+                            is_login = true;
+                            // 1.0 读取cwd请求
+                            buffer = [0; 1024];
+                            let len = socket.read(&mut buffer).await.unwrap();
+                            if len == 0
+                                || String::from_utf8_lossy(&buffer[..len]).trim() != CWD_REQUEST
+                            {
+                                error!("error reading answer from client");
+                                return;
+                            }
+                        }
+                        "regist" => {
+                            regist(&res_vec[1..], &mut socket).await;
+                            continue;
+                        }
+                        _ => {
+                            error!("invalid {}", res_vec[0]);
+                            return;
+                        }
+                    }
+                }
+
+                // 1. 将cwd发送给client
+                let fs = Arc::clone(&SFS);
+                let cwd = fs.read().await.cwd.clone();
+                drop(fs);
+                if let Err(e) = socket.write_all(cwd.as_bytes()).await {
+                    error!("failed to write to socket; err = {:?}", e);
                     return;
                 }
 
@@ -120,9 +170,8 @@ async fn main() -> io::Result<()> {
     }
 }
 
-#[allow(unused)]
 async fn do_command(
-    mut args: Vec<&str>,
+    args: Vec<&str>,
     socket: &mut TcpStream,
 ) -> Result<Option<String>, std::io::Error> {
     let args: Vec<String> = args
@@ -182,6 +231,31 @@ async fn do_command(
     }
 }
 
+async fn login(user: &[&str], socket: &mut TcpStream) -> Result<(), ()> {
+    let fs = Arc::clone(&SFS);
+    let mut fs_write_lock = fs.write().await;
+    if let Err(e) = fs_write_lock.sign_in(user[0], user[1]) {
+        // 回信client登录失败
+        socket.write_all(e.to_string().as_bytes()).await.unwrap();
+        return Err(());
+    }
+    // 0.1.2 回信成功
+    socket.write_all(LOGIN_SUCCESS.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn regist(user: &[&str], socket: &mut TcpStream) {
+    let fs = Arc::clone(&SFS);
+    let mut fs_write_lock = fs.write().await;
+    if let Err(e) = fs_write_lock.sign_up(user[0], user[1]).await {
+        // 回信client注册失败
+        socket.write_all(e.to_string().as_bytes()).await.unwrap();
+        return;
+    }
+    info!("user: {} signed up", user[0]);
+    // 0.2.2 回信成功
+    socket.write_all(REGIST_SUCCESS.as_bytes()).await.unwrap();
+}
 fn error_arg() -> std::io::Error {
     std::io::Error::new(io::ErrorKind::InvalidInput, "invalid args")
 }

@@ -53,7 +53,7 @@ impl SuperBlock {
         sb
     }
 
-    pub async fn cache(&self) {
+    async fn cache(&self) {
         trace!("write super block to cache");
         write_block(self, 0, 0).await;
     }

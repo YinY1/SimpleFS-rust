@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::{block::BlockIDType, dirent::DirEntry, inode::Inode};
+use crate::{block::BlockIDType, dirent::DirEntry, inode::Inode, super_block::SuperBlock};
 
 pub const FS_FILE_NAME: &str = "SIMPLE_FS";
 
@@ -31,6 +31,8 @@ pub const DATA_BITMAP_START_BLOCK: usize = INODE_BITMAP_START_BLOCK + INODE_BITM
 pub const INODE_START_BLOCK: usize = DATA_BITMAP_START_BLOCK + DATA_BITMAP_NUM; // inode 区起始块号
 
 pub const DATA_START_BLOCK: usize = INODE_START_BLOCK + INODE_BLOCK_NUM; // data 区起始块号
+
+pub const USER_START_BYTE: usize = size_of::<SuperBlock>() + 16; // 用户信息起始位置，加一些偏移防止重叠
 
 //* 寻址 */
 pub const DIRECT_BLOCK_NUM: usize = 8; // 直接块数

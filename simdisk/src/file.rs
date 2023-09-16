@@ -10,6 +10,7 @@ use crate::{
     dirent::{self, DirEntry},
     fs_constants::*,
     inode::{FileMode, Inode, InodeType},
+    user,
 };
 
 pub async fn create_file(
@@ -19,6 +20,7 @@ pub async fn create_file(
     is_copy: bool,
     content: &str,
     socket: &mut TcpStream,
+    user_id: (u16, u16),
 ) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
@@ -54,7 +56,15 @@ pub async fn create_file(
     // 按block大小分割
     let input_vecs = split_inputs(inputs);
     // 按大小申请inode
-    let mut inode = Inode::alloc(InodeType::File, parent_inode, mode, size).await?;
+    let mut inode = Inode::alloc(
+        InodeType::File,
+        parent_inode,
+        mode,
+        size,
+        user_id.0,
+        user_id.1,
+    )
+    .await?;
     inode.linkat().await;
 
     dirent.inode_id = inode.inode_id;
@@ -70,17 +80,23 @@ pub async fn create_file(
     Ok(())
 }
 
-pub async fn remove_file(name: &str, parent_inode: &mut Inode) -> Result<(), Error> {
+pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
     match dirent.get_block_id(parent_inode).await {
         Err(err) => Err(err),
         Ok((level, block_id)) => {
+            let mut inode = Inode::read(dirent.inode_id as usize).await?;
+            if !user::able_to_modify(gid, inode.gid) {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Insufficient user permissions",
+                ));
+            }
             // 删除目录项
             remove_object(&dirent, block_id as usize, level, parent_inode).await?;
             // 释放inode
-            let mut inode = Inode::read(dirent.inode_id as usize).await?;
             inode.dealloc().await;
             Ok(())
         }

@@ -50,12 +50,12 @@ async fn main() -> io::Result<()> {
         info!("connected to {:?}", addr);
         // spawn一个线程
         tokio::spawn(async move {
-            let mut buffer;
+            let mut cmd_buffer;
             let mut is_login = false;
             loop {
-                buffer = [0; 1024];
+                cmd_buffer = [0; 1024];
                 // 0.0 接受bash ok请求
-                let n = match socket.read(&mut buffer).await {
+                let n = match socket.read(&mut cmd_buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
                     Err(e) => {
@@ -63,7 +63,7 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                 };
-                let bash = String::from_utf8_lossy(&buffer[..n]);
+                let bash = String::from_utf8_lossy(&cmd_buffer[..n]);
                 if bash.replace('\0', "").trim() != BASH_REQUEST {
                     error!("wrong request for cwd, arg={}", bash);
                     return;
@@ -77,16 +77,16 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                     // 0.(1/2).1 等待client 发送信息
-                    buffer = [0; 1024];
-                    let n = match socket.read(&mut buffer).await {
+                    cmd_buffer = [0; 1024];
+                    let n = match socket.read(&mut cmd_buffer).await {
                         Ok(n) => n,
                         Err(e) => {
                             error!("failed to read from socket; err = {:?}", e);
                             return;
                         }
                     };
-                    let response = String::from_utf8_lossy(&buffer[..n]);
-                    let res_vec: Vec<&str> = response.split_whitespace().collect();
+                    let response = String::from_utf8_lossy(&cmd_buffer[..n]);
+                    let res_vec: Vec<&str> = response.lines().collect();
                     //  0.(1/2).2 验证信息并回信
                     match res_vec[0].trim() {
                         "login" => {
@@ -95,10 +95,10 @@ async fn main() -> io::Result<()> {
                             }
                             is_login = true;
                             // 1.0 读取cwd请求
-                            buffer = [0; 1024];
-                            let len = socket.read(&mut buffer).await.unwrap();
+                            cmd_buffer = [0; 1024];
+                            let len = socket.read(&mut cmd_buffer).await.unwrap();
                             if len == 0
-                                || String::from_utf8_lossy(&buffer[..len]).trim() != CWD_REQUEST
+                                || String::from_utf8_lossy(&cmd_buffer[..len]).trim() != CWD_REQUEST
                             {
                                 error!("error reading answer from client");
                                 return;
@@ -125,8 +125,8 @@ async fn main() -> io::Result<()> {
                 }
 
                 // 2.1 接受client的指令
-                buffer = [0; 1024];
-                let _ = match socket.read(&mut buffer).await {
+                cmd_buffer = [0; 1024];
+                let _ = match socket.read(&mut cmd_buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
                     Err(e) => {
@@ -134,7 +134,7 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                 };
-                let cmd = String::from_utf8_lossy(&buffer).replace('\0', "");
+                let cmd = String::from_utf8_lossy(&cmd_buffer).replace('\0', "");
                 let command = cmd.trim();
                 if command == EXIT_MSG {
                     info!("socket {:?} exit", addr);
@@ -146,25 +146,24 @@ async fn main() -> io::Result<()> {
                 let args: Vec<&str> = command.split_whitespace().collect();
 
                 // 2.2 传输命令执行后的信息
-                let _ = match do_command(args, &mut socket).await {
-                    Ok(result) => match result {
-                        // 3.1 对于需要返回信息的command（ls等）写回给client
-                        Some(output) => {
-                            info!("cmd successfully get output");
-                            socket.write_all(output.as_bytes()).await
+                match do_command(args, &mut socket).await {
+                    Ok(result) => {
+                        if let Some(output) = result {
+                            // 2.3 通知对方准备接受内容 将输出通过8081传输
+                            socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
+                            send_content(output).await.unwrap();
                         }
-                        // 3.2 不需要返回信息的command（cd等）写回ok信息给client
-                        None => {
-                            info!("cmd finished");
-                            socket.write_all(COMMAND_FINISHED.as_bytes()).await
-                        }
-                    },
-                    // 3.3 命令执行出错的写回err
+                    }
+                    // 2.3 命令执行出错的写回err,也通过8081
                     Err(err) => {
                         error!("send err back to socket: {:?}, err= {}", addr, err);
-                        socket.write_all(err.to_string().as_bytes()).await
+                        socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
+                        send_content(err.to_string()).await.unwrap();
                     }
                 };
+                // 4 宣告结束
+                info!("cmd finished");
+                socket.write_all(COMMAND_FINISHED.as_bytes()).await.unwrap();
             }
         });
     }
@@ -256,6 +255,7 @@ async fn regist(user: &[&str], socket: &mut TcpStream) {
     // 0.2.2 回信成功
     socket.write_all(REGIST_SUCCESS.as_bytes()).await.unwrap();
 }
+
 fn error_arg() -> std::io::Error {
     std::io::Error::new(io::ErrorKind::InvalidInput, "invalid args")
 }

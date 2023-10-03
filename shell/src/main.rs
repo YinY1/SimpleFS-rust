@@ -27,7 +27,7 @@ async fn main() -> io::Result<()> {
 
         if !is_login {
             // 0.0.1 获取登录请求
-            info!("waiting login request");
+            trace!("waiting login request");
             stream_buffer = [0; 1024];
             let n = stream.read(&mut stream_buffer).await?;
             if n == 0 {
@@ -40,11 +40,11 @@ async fn main() -> io::Result<()> {
                 return Err(Error::new(ErrorKind::NotConnected, ""));
             }
             // 选择注册还是登录
-            info!("sign in or sign up");
+            info!("select: \n[1]sign In\n[2]sign Up\n[3]EXIT");
             let mut choice = String::new();
             io_reader.read_line(&mut choice).await?;
-            match choice.trim() {
-                "sign in" => {
+            match choice.to_lowercase().trim() {
+                "sign in" | "1" | "i" => {
                     if login(&mut username, &mut io_reader, &mut stream)
                         .await
                         .is_err()
@@ -55,13 +55,13 @@ async fn main() -> io::Result<()> {
                     // 1.0 请求cwd
                     stream.write_all(CWD_REQUEST.as_bytes()).await?;
                 }
-                "sign up" => {
+                "sign up" | "2" | "u" => {
                     if let Err(e) = regist(&mut io_reader, &mut stream).await {
                         error!("{}", e);
                     }
                     continue;
                 }
-                "EXIT" => return Err(Error::new(ErrorKind::ConnectionReset, "")),
+                "exit" => return Err(Error::new(ErrorKind::ConnectionReset, "")),
                 _ => {
                     error!("invalid arg");
                     return Err(Error::new(ErrorKind::InvalidInput, ""));
@@ -112,8 +112,8 @@ async fn main() -> io::Result<()> {
             // 2. ex1.1 需要输入文件内容
             INPUT_FILE_CONTENT => {
                 let inputs = read_file_content(&mut io_reader).await?;
-                // 2. ex1.2 将得到的文件内容发送给server
-                stream.write_all(inputs.as_bytes()).await?;
+                // 2. ex1.2 将得到的文件内容通过8081发送给server
+                send_content(inputs).await?;
             }
             // 需要确认是否继续执行
             COMMAND_CONFIRM => {
@@ -127,11 +127,16 @@ async fn main() -> io::Result<()> {
                 }
                 stream.write_all(answer.as_bytes()).await?;
             }
-            // 正常返回文件内容（可能是正常信息，也可能是错误信息
+            // 2.3 需要打开文件通道接受内容
+            RECEIVE_CONTENTS => {
+                let contents = receive_content().await?;
+                println!("{}", contents);
+                // -->跳转到3.
+            }
+            // 4. 本次指令执行完毕
             COMMAND_FINISHED => continue,
             _ => {
-                println!("{}", msg);
-                continue;
+                panic!("{}", msg);
             }
         };
         // 3. 等待server应答
@@ -143,6 +148,7 @@ async fn main() -> io::Result<()> {
         }
         let msg = String::from_utf8_lossy(&stream_buffer).replace('\0', "");
         if msg.trim() != COMMAND_FINISHED {
+            // 4 宣告结束
             println!("{}", msg);
         }
     }
@@ -154,15 +160,16 @@ async fn login(
     stream: &mut TcpStream,
 ) -> io::Result<()> {
     // 输入用户信息
-    info!("enter user");
+    info!("enter username");
     username.clear();
     io_reader.read_line(username).await?;
+    info!("enter password");
     let mut password = String::new();
     io_reader.read_line(&mut password).await?;
 
     //  0.1.1 发送登录信息
     stream
-        .write_all(["login ", username, " ", &password].concat().as_bytes())
+        .write_all(["login\n", username, &password].concat().as_bytes())
         .await?;
     // 0.1.2 接受回传信息
     let mut stream_buffer = [0; 1024];
@@ -189,7 +196,7 @@ async fn regist(io_reader: &mut BufReader<Stdin>, stream: &mut TcpStream) -> io:
 
     //  0.2.1 发送注册信息
     stream
-        .write_all(["regist ", &username, " ", &password].concat().as_bytes())
+        .write_all(["regist\n", &username, &password].concat().as_bytes())
         .await?;
     // 0.2.2 接受回传信息
     let mut stream_buffer = [0; 1024];

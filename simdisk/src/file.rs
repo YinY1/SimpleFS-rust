@@ -1,9 +1,7 @@
 use std::io::{Error, ErrorKind};
 
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use shell::receive_content;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 use crate::{
     block::{get_all_blocks, insert_object, remove_object, write_file_content_to_block},
@@ -39,15 +37,7 @@ pub async fn create_file(
             .write_all(shell::INPUT_FILE_CONTENT.as_bytes())
             .await?;
         // 2.ex1.2 client 读取文件内容
-        let mut input_buffer = [0; 1024]; // TODO 循环读缓冲区直到读完
-        let n = socket.read(&mut input_buffer).await?;
-        if n == 0 {
-            return Err(Error::new(
-                ErrorKind::ConnectionAborted,
-                "cannot read file content from client",
-            ));
-        }
-        inputs = String::from_utf8_lossy(&input_buffer).to_string();
+        inputs = receive_content().await?;
         if inputs.len() > MAX_FILE_SIZE {
             return Err(Error::new(ErrorKind::OutOfMemory, "File size limit exceed"));
         }

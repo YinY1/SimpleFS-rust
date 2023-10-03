@@ -171,6 +171,12 @@ pub async fn check() -> Result<(), Error> {
     Ok(())
 }
 
+pub async fn get_users_info() -> Result<Option<String>, Error> {
+    let users = SFS.read().await.get_users_info()?;
+    trace!("finished cmd: users");
+    Ok(Some(format!("{:#?}", users)))
+}
+
 /// 临时移动到指定目录,并执行f的操作，
 /// 如果需要在操作之后更新块缓存，need_sync设置为true
 ///

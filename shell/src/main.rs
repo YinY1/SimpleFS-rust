@@ -28,7 +28,7 @@ async fn main() -> io::Result<()> {
         if !is_login {
             // 0.0.1 获取登录请求
             trace!("waiting login request");
-            stream_buffer = [0; 1024];
+            stream_buffer = [0; SOCKET_BUFFER_SIZE];
             let n = stream.read(&mut stream_buffer).await?;
             if n == 0 {
                 error!("error reading answer from server");
@@ -70,7 +70,7 @@ async fn main() -> io::Result<()> {
         }
 
         // 1. 获取cwd
-        stream_buffer = [0; 1024];
+        stream_buffer = [0; SOCKET_BUFFER_SIZE];
         let len = stream.read(&mut stream_buffer).await?;
         if len == 0 {
             error!("error reading answer from server");
@@ -96,12 +96,17 @@ async fn main() -> io::Result<()> {
             stream.write_all(input.as_bytes()).await?;
             return Ok(());
         }
+        if input.to_lowercase().trim() == HELP_REQUEST {
+            print_help();
+            stream.write_all(EMPTY_INPUT.as_bytes()).await?;
+            continue;
+        }
 
         // 2.1 将指令发给server
         stream.write_all(input.as_bytes()).await?;
 
         // 2.3 读取返回信息，如果是需要继续输入信息的，则回复，否则不回复
-        stream_buffer = [0; 1024];
+        stream_buffer = [0; SOCKET_BUFFER_SIZE];
         let n = stream.read(&mut stream_buffer).await?;
         if n == 0 {
             error!("error reading answer from server");
@@ -140,7 +145,7 @@ async fn main() -> io::Result<()> {
             }
         };
         // 3. 等待server应答
-        stream_buffer = [0; 1024];
+        stream_buffer = [0; SOCKET_BUFFER_SIZE];
         let n = stream.read(&mut stream_buffer).await?;
         if n == 0 {
             error!("error reading answer from server");
@@ -172,7 +177,7 @@ async fn login(
         .write_all(["login\n", username, &password].concat().as_bytes())
         .await?;
     // 0.1.2 接受回传信息
-    let mut stream_buffer = [0; 1024];
+    let mut stream_buffer = [0; SOCKET_BUFFER_SIZE];
     let n = stream.read(&mut stream_buffer).await?;
     if n == 0 {
         error!("error reading answer from server");
@@ -199,7 +204,7 @@ async fn regist(io_reader: &mut BufReader<Stdin>, stream: &mut TcpStream) -> io:
         .write_all(["regist\n", &username, &password].concat().as_bytes())
         .await?;
     // 0.2.2 接受回传信息
-    let mut stream_buffer = [0; 1024];
+    let mut stream_buffer = [0; SOCKET_BUFFER_SIZE];
     let n = stream.read(&mut stream_buffer).await?;
     if n == 0 {
         error!("error reading answer from server");
@@ -226,4 +231,17 @@ async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<Strin
     }
     info!("get intputs: --->[{}]<---", inputs);
     Ok(inputs)
+}
+
+fn print_help() {
+    println!("info");
+    println!("dir (path) (/s)");
+    println!("cd [path]");
+    println!("md [path]");
+    println!("rd [path]");
+    println!("newfile [filename]");
+    println!("cat [filename]");
+    println!("copy (<host>)[src path] [dst path]");
+    println!("check");
+    println!("EXIT");
 }

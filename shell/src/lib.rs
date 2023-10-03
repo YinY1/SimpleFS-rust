@@ -20,6 +20,8 @@ pub const LOGIN_SUCCESS: &str = "LOGIN_SUCCESS";
 pub const REGIST_SUCCESS: &str = "REGIST SUCCESS";
 pub const RECEIVE_CONTENTS: &str = "RECEIVE CONTENTS";
 pub const READY_RECEIVE_CONTENTS: &str = "READY!";
+pub const HELP_REQUEST:&str = "help";
+pub const SOCKET_BUFFER_SIZE: usize = 128;
 
 pub async fn send_content(content: String) -> io::Result<()> {
     let mut stream;

@@ -6,19 +6,22 @@ use crate::{
     fs_constants::{BLOCK_SIZE, USER_START_BYTE},
 };
 
-#[derive(Serialize, Deserialize, Default, Hash, Clone)]
-pub struct UserInfo {
+#[derive(Serialize, Deserialize, Default, Hash, Clone, Debug)]
+pub struct UserIdGroup {
     pub gid: u16,
     pub uid: u16,
 }
 
+// map{username: (password, (gid,uid))}
+pub type UserInfo = HashMap<String, (String, UserIdGroup)>;
+
 #[derive(Serialize, Deserialize, Default)]
-pub struct User(HashMap<String, (String, UserInfo)>);
+pub struct User(pub UserInfo);
 
 impl User {
     pub async fn init() -> Self {
         let mut s = Self(HashMap::new());
-        let info = UserInfo { gid: 0, uid: 0 };
+        let info = UserIdGroup { gid: 0, uid: 0 };
         s.0.insert("root".to_owned(), ("admin".to_owned(), info));
         s.cache().await;
         s
@@ -36,7 +39,7 @@ impl User {
                 "user exists",
             ));
         }
-        let info = UserInfo {
+        let info = UserIdGroup {
             gid: 1,
             uid: self.get_user_num() as u16 + 1,
         };
@@ -46,7 +49,7 @@ impl User {
         Ok(())
     }
 
-    pub fn sign_in(&self, username: &str, password: &str) -> Result<UserInfo, Error> {
+    pub fn sign_in(&self, username: &str, password: &str) -> Result<UserIdGroup, Error> {
         match self.0.get(username) {
             Some(info) => {
                 if info.0 == password {

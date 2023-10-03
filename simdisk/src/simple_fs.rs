@@ -13,7 +13,7 @@ use crate::{
     fs_constants::*,
     inode::Inode,
     super_block::SuperBlock,
-    user::{User, UserInfo},
+    user::{User, UserIdGroup, UserInfo},
 };
 
 #[allow(unused)]
@@ -24,7 +24,7 @@ pub struct SampleFileSystem {
     pub current_inode: Inode,
     pub cwd: String,
     pub user_infos: User,
-    pub current_user: UserInfo,
+    pub current_user: UserIdGroup,
 }
 
 impl SampleFileSystem {
@@ -38,7 +38,7 @@ impl SampleFileSystem {
             super_block: SuperBlock::read().await.unwrap(),
             cwd: String::from("~"),
             user_infos: User::read().await.unwrap(),
-            current_user: UserInfo::default(),
+            current_user: UserIdGroup::default(),
         };
     }
     /// 只从文件系统读出可能更改的root inode信息
@@ -95,7 +95,7 @@ impl SampleFileSystem {
             super_block,
             cwd: "~".to_string(),
             user_infos: user_info,
-            current_user: UserInfo::default(),
+            current_user: UserIdGroup::default(),
         }
     }
 
@@ -113,6 +113,17 @@ impl SampleFileSystem {
 
     pub async fn sign_up(&mut self, username: &str, password: &str) -> Result<(), Error> {
         self.user_infos.sign_up(username, password).await
+    }
+
+    pub fn get_users_info(&self) -> Result<UserInfo, Error> {
+        if self.current_user.gid != 0 {
+            Err(Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "not in root",
+            ))
+        } else {
+            Ok(self.user_infos.0.clone())
+        }
     }
 }
 

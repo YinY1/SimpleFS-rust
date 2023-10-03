@@ -53,7 +53,7 @@ async fn main() -> io::Result<()> {
             let mut cmd_buffer;
             let mut is_login = false;
             loop {
-                cmd_buffer = [0; 1024];
+                cmd_buffer = [0; SOCKET_BUFFER_SIZE];
                 // 0.0 接受bash ok请求
                 let n = match socket.read(&mut cmd_buffer).await {
                     Ok(n) if n == 0 => return,
@@ -77,7 +77,7 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                     // 0.(1/2).1 等待client 发送信息
-                    cmd_buffer = [0; 1024];
+                    cmd_buffer = [0; SOCKET_BUFFER_SIZE];
                     let n = match socket.read(&mut cmd_buffer).await {
                         Ok(n) => n,
                         Err(e) => {
@@ -95,7 +95,7 @@ async fn main() -> io::Result<()> {
                             }
                             is_login = true;
                             // 1.0 读取cwd请求
-                            cmd_buffer = [0; 1024];
+                            cmd_buffer = [0; SOCKET_BUFFER_SIZE];
                             let len = socket.read(&mut cmd_buffer).await.unwrap();
                             if len == 0
                                 || String::from_utf8_lossy(&cmd_buffer[..len]).trim() != CWD_REQUEST
@@ -125,7 +125,7 @@ async fn main() -> io::Result<()> {
                 }
 
                 // 2.1 接受client的指令
-                cmd_buffer = [0; 1024];
+                cmd_buffer = [0; SOCKET_BUFFER_SIZE];
                 let _ = match socket.read(&mut cmd_buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
@@ -201,6 +201,7 @@ async fn do_command(
             1 => match args[0].as_str() {
                 "info" => syscall::info().await,
                 "check" => syscall::check().await.map(|_| None),
+                "users" => syscall::get_users_info().await,
                 _ => Err(error_arg()),
             },
             2 => {

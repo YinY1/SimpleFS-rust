@@ -96,9 +96,10 @@ pub struct DirEntry {//16B(对齐后)
     - 删除文件：删除指定文件，不存在时给出出错信息。
 - check
     - 检测并修复超级块错误（强制复写超级块）
-- EXIT 退出shell
+- EXIT
+    - 退出shell
+- users
+    - root下打印所有用户信息
 ## 使用
 - 在simdisk/下运行 `cargo run --release`启动后台管理程序，首次使用或者超级块被破坏会执行初始化，创建`SIMPLE_FS`文件作为系统载体
 - 然后在shell/下运行`cargo run --release`打开shell，支持多个shell同时连接simdisk
-## 存在的问题
-[] 应该仿照ftp用两个端口，一个传指令一个传内容，但是偷懒没弄，所以cat\dir等 长内容、newfile输入长内容都会有bug（只读一次1KB的buffer）

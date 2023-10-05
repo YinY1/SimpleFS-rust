@@ -337,38 +337,23 @@ pub async fn remove_directory(
 
 /// 进入某目录（将current inode更换为所指目录项的inode), 如果有错误信息则返回
 pub async fn cd(path: &str) -> Result<(), Error> {
-    // 是根目录直接返回
     let fs = Arc::clone(&SFS);
-    if path == "~" {
-        let root = fs.read().await.root_inode.clone();
-        let mut w = fs.write().await;
-        w.current_inode = root;
-        w.cwd = String::from("~");
-        return Ok(());
-    }
-    //将路径分割为多段
+    //将绝对路径分割为多段
     let paths: Vec<&str> = path.split('/').collect();
     let mut current_inode = fs.read().await.current_inode.clone();
-    // 循环复合目录
-    for &path in &paths {
-        // 找不到了便返回None
+    // 循环复合目录(除去~)
+    for &path in &paths[1..] {
+        // 找不到了便返回Err
         match try_cd(path, &current_inode).await {
             Ok(inode) => current_inode = inode,
-            Err(e) => return Err(e),
+            Err(e) => {
+                let root = fs.read().await.root_inode.clone();
+                fs.write().await.current_inode = root;
+                return Err(e);
+            }
         }
     }
     fs.write().await.current_inode = current_inode;
-    // 调整当前目录
-    for &path in &paths {
-        match path {
-            "." => {}
-            ".." => {
-                let idx = fs.read().await.cwd.rfind('/').unwrap();
-                fs.write().await.cwd.replace_range(idx.., "");
-            }
-            _ => fs.write().await.cwd.push_str(&["/", path].concat()),
-        }
-    }
     Ok(())
 }
 

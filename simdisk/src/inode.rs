@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::min,
     io::{Error, ErrorKind},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -12,6 +13,8 @@ use crate::{
     block::{deserialize, get_block_buffer, write_block, BlockIDType},
     dirent::DirEntry,
     fs_constants::*,
+    simple_fs::SFS,
+    user,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -21,7 +24,7 @@ pub struct Inode {
     pub inode_type: InodeType,
     mode: FileMode, // 权限
     nlink: u8,      // 硬连接数
-    pub gid: u16,       // 组id
+    pub gid: u16,   // 组id
     uid: u16,       // 用户id
     size: u32,      // 文件大小
     time_info: u64, // 时间戳
@@ -334,8 +337,19 @@ impl Inode {
                 let inode = Self::read(dir.inode_id as usize).await.unwrap();
                 let addr = inode.addr[0] as usize * BLOCK_SIZE;
                 let time = cal_date(inode.time_info);
-                let mode = inode.mode;
-                let infos = format!("\taddr:{:#x}\tcreated: {:#?}\t{:?}", addr, time, mode);
+                let fs = Arc::clone(&SFS);
+                let fs_read_lock = fs.read().await;
+                let username = fs_read_lock.get_username(inode.uid).unwrap();
+                let mode = if user::able_to_modify(fs_read_lock.current_user.gid, inode.gid) {
+                    inode.mode
+                } else {
+                    FileMode::RDONLY
+                };
+
+                let infos = format!(
+                    "\taddr:{:#x}\tcreated: {:#?}\t{:?}\t\tBy: {:?}",
+                    addr, time, mode, username,
+                );
                 name.push_str(&infos);
             }
             dir_infos.push_str(&name);

@@ -53,29 +53,7 @@ async fn main() -> io::Result<()> {
             let mut cmd_buffer;
             let mut is_login = false;
             loop {
-                cmd_buffer = [0; SOCKET_BUFFER_SIZE];
-                // 0.0 接受bash ok请求
-                let n = match socket.read(&mut cmd_buffer).await {
-                    Ok(n) if n == 0 => return,
-                    Ok(n) => n,
-                    Err(e) => {
-                        error!("failed to read from socket; err = {:?}", e);
-                        return;
-                    }
-                };
-                let bash = String::from_utf8_lossy(&cmd_buffer[..n]);
-                if bash.replace('\0', "").trim() != BASH_REQUEST {
-                    error!("wrong request for cwd, arg={}", bash);
-                    return;
-                }
-
                 if !is_login {
-                    // 0.0.1 请求登录
-                    info!("ask user login or regist");
-                    if let Err(e) = socket.write_all(LOGIN_REQUEST.as_bytes()).await {
-                        error!("failed to write to socket; err = {:?}", e);
-                        return;
-                    }
                     // 0.(1/2).1 等待client 发送信息
                     cmd_buffer = [0; SOCKET_BUFFER_SIZE];
                     let n = match socket.read(&mut cmd_buffer).await {
@@ -94,15 +72,6 @@ async fn main() -> io::Result<()> {
                                 continue;
                             }
                             is_login = true;
-                            // 1.0 读取cwd请求
-                            cmd_buffer = [0; SOCKET_BUFFER_SIZE];
-                            let len = socket.read(&mut cmd_buffer).await.unwrap();
-                            if len == 0
-                                || String::from_utf8_lossy(&cmd_buffer[..len]).trim() != CWD_REQUEST
-                            {
-                                error!("error reading answer from client");
-                                return;
-                            }
                         }
                         "regist" => {
                             regist(&res_vec[1..], &mut socket).await;
@@ -115,18 +84,9 @@ async fn main() -> io::Result<()> {
                     }
                 }
 
-                // 1. 将cwd发送给client
-                let fs = Arc::clone(&SFS);
-                let cwd = fs.read().await.cwd.clone();
-                drop(fs);
-                if let Err(e) = socket.write_all(cwd.as_bytes()).await {
-                    error!("failed to write to socket; err = {:?}", e);
-                    return;
-                }
-
-                // 2.1 接受client的指令
+                // 2.1 接受client的"cwd + 指令"
                 cmd_buffer = [0; SOCKET_BUFFER_SIZE];
-                let _ = match socket.read(&mut cmd_buffer).await {
+                let n = match socket.read(&mut cmd_buffer).await {
                     Ok(n) if n == 0 => return,
                     Ok(n) => n,
                     Err(e) => {
@@ -134,7 +94,7 @@ async fn main() -> io::Result<()> {
                         return;
                     }
                 };
-                let cmd = String::from_utf8_lossy(&cmd_buffer).replace('\0', "");
+                let cmd = String::from_utf8_lossy(&cmd_buffer[..n]).replace('\0', "");
                 let command = cmd.trim();
                 if command == EXIT_MSG {
                     info!("socket {:?} exit", addr);
@@ -143,6 +103,7 @@ async fn main() -> io::Result<()> {
                 } else if command == EMPTY_INPUT {
                     continue;
                 }
+                // args[0]为cwd
                 let args: Vec<&str> = command.split_whitespace().collect();
 
                 // 2.2 传输命令执行后的信息
@@ -173,57 +134,68 @@ async fn do_command(
     args: Vec<&str>,
     socket: &mut TcpStream,
 ) -> Result<Option<String>, std::io::Error> {
-    let args: Vec<String> = args
-        .iter()
-        .map(|&arg| arg.replace('\0', "").trim().to_string())
-        .collect();
     info!(
         "received args: '{:?}' from socket: {:?}",
         args,
         socket.peer_addr().unwrap()
     );
-    if args[0].as_str() == "dir" {
-        if args.last().unwrap() == "/s" {
-            match args.len() {
-                2 => syscall::ls(true).await,
-                3 => syscall::ls_dir(&args[1], true).await,
+    let cwd = args[0];
+    let commands: Vec<String> = args[1..]
+        .iter()
+        .map(|&arg| arg.replace('\0', "").trim().to_string())
+        .collect();
+
+    if commands[0].as_str() == "dir" {
+        if commands.last().unwrap() == "/s" {
+            match commands.len() {
+                2 => syscall::ls(cwd, true).await,
+                3 => {
+                    let target_path = get_absolute_path(cwd, &commands[1]);
+                    syscall::ls(&target_path, true).await
+                }
                 _ => Err(error_arg()),
             }
         } else {
-            match args.len() {
-                1 => syscall::ls(false).await,
-                2 => syscall::ls_dir(&args[1], false).await,
+            match commands.len() {
+                1 => syscall::ls(cwd, false).await,
+                2 => {
+                    let target_path = get_absolute_path(cwd, &commands[1]);
+                    syscall::ls(&target_path, false).await
+                }
                 _ => Err(error_arg()),
             }
         }
     } else {
-        match args.len() {
-            1 => match args[0].as_str() {
+        match commands.len() {
+            1 => match commands[0].as_str() {
                 "info" => syscall::info().await,
                 "check" => syscall::check().await.map(|_| None),
                 "users" => syscall::get_users_info().await,
                 _ => Err(error_arg()),
             },
             2 => {
-                let name = args[1].as_str();
-                match args[0].as_str() {
-                    "cd" => syscall::cd(name).await.map(|_| None),
-                    "md" => syscall::mkdir(name).await.map(|_| None),
+                let name = get_absolute_path(cwd, &commands[1]);
+                match commands[0].as_str() {
+                    "cd" => syscall::cd(&name).await.map(|_| None),
+                    "md" => syscall::mkdir(&name).await.map(|_| None),
                     // 对于rd 要等待client确认是否删除
-                    "rd" => syscall::rmdir(name, socket).await.map(|_| None),
+                    "rd" => syscall::rmdir(&name, socket).await.map(|_| None),
                     // 对于newfile 需要输入文件内容，要等待client传输内容
-                    "newfile" => syscall::new_file(name, FileMode::RDWR, socket)
+                    "newfile" => syscall::new_file(&name, FileMode::RDWR, socket)
                         .await
                         .map(|_| None),
-                    "cat" => syscall::cat(name).await,
-                    "del" => syscall::del(name).await.map(|_| None),
+                    "cat" => syscall::cat(&name).await,
+                    "del" => syscall::del(&name).await.map(|_| None),
                     _ => Err(error_arg()),
                 }
             }
-            3 => match args[0].as_str() {
-                "copy" => syscall::copy(args[1].as_str(), args[2].as_str(), socket)
-                    .await
-                    .map(|_| None),
+            3 => match commands[0].as_str() {
+                "copy" => {
+                    let target_path = get_absolute_path(cwd, &commands[2]);
+                    syscall::copy(commands[1].as_str(), &target_path, socket)
+                        .await
+                        .map(|_| None)
+                }
                 _ => Err(error_arg()),
             },
             _ => Err(error_arg()),
@@ -258,5 +230,18 @@ async fn regist(user: &[&str], socket: &mut TcpStream) {
 }
 
 fn error_arg() -> std::io::Error {
-    std::io::Error::new(io::ErrorKind::InvalidInput, "invalid args")
+    std::io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "invalid args, input 'help' to see commands",
+    )
+}
+
+fn get_absolute_path(cwd: &str, path: &str) -> String {
+    if path.starts_with('~') {
+        // 绝对路径
+        path.to_string()
+    } else {
+        // 相对路径
+        [cwd, "/", path].concat()
+    }
 }

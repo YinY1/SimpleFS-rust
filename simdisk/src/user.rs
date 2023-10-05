@@ -67,6 +67,22 @@ impl User {
         }
     }
 
+    pub fn get_user_name(&self, uid: u16) -> Result<String, Error> {
+        match self.0.iter().find_map(|(username, (_, ids))| {
+            if ids.uid == uid {
+                Some(username.to_string())
+            } else {
+                None
+            }
+        }) {
+            Some(username) => Ok(username),
+            None => Err(Error::new(
+                std::io::ErrorKind::NotFound,
+                "user not exists",
+            )),
+        }
+    }
+
     fn get_user_num(&self) -> usize {
         self.0.len() - 1
     }

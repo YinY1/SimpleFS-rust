@@ -22,7 +22,7 @@ pub struct SampleFileSystem {
     pub root_inode: Inode,
     pub super_block: SuperBlock,
     pub current_inode: Inode,
-    pub cwd: String,
+    //pub cwd: String,
     pub user_infos: User,
     pub current_user: UserIdGroup,
 }
@@ -36,7 +36,6 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block: SuperBlock::read().await.unwrap(),
-            cwd: String::from("~"),
             user_infos: User::read().await.unwrap(),
             current_user: UserIdGroup::default(),
         };
@@ -93,7 +92,6 @@ impl SampleFileSystem {
             current_inode: root_inode.clone(),
             root_inode,
             super_block,
-            cwd: "~".to_string(),
             user_infos: user_info,
             current_user: UserIdGroup::default(),
         }
@@ -124,6 +122,10 @@ impl SampleFileSystem {
         } else {
             Ok(self.user_infos.0.clone())
         }
+    }
+
+    pub fn get_username(&self, uid: u16) -> Result<String, Error> {
+        self.user_infos.get_user_name(uid)
     }
 }
 

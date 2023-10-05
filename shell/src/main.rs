@@ -20,31 +20,17 @@ async fn main() -> io::Result<()> {
     let mut stream_buffer;
     let mut is_login = false;
     let mut username = String::new();
-    loop {
-        // 0. 发送信息请求bash
-        let msg = BASH_REQUEST;
-        stream.write_all(msg.as_bytes()).await?;
+    let mut cwd = "~".to_string();
 
+    loop {
         if !is_login {
-            // 0.0.1 获取登录请求
-            trace!("waiting login request");
-            stream_buffer = [0; SOCKET_BUFFER_SIZE];
-            let n = stream.read(&mut stream_buffer).await?;
-            if n == 0 {
-                error!("error reading answer from server");
-                return Err(Error::new(ErrorKind::NotConnected, ""));
-            }
-            let login_request = String::from_utf8_lossy(&stream_buffer[..n]);
-            if login_request != LOGIN_REQUEST {
-                error!("error login in server");
-                return Err(Error::new(ErrorKind::NotConnected, ""));
-            }
-            // 选择注册还是登录
-            info!("select: \n[1]sign In\n[2]sign Up\n[3]EXIT");
+            // 0.(1/2).1 选择注册还是登录
+            info!("select: \n[1]sign In\n[2]sign Up");
             let mut choice = String::new();
             io_reader.read_line(&mut choice).await?;
             match choice.to_lowercase().trim() {
                 "sign in" | "1" | "i" => {
+                    // 向server发送登录信息
                     if login(&mut username, &mut io_reader, &mut stream)
                         .await
                         .is_err()
@@ -52,16 +38,14 @@ async fn main() -> io::Result<()> {
                         continue;
                     };
                     is_login = true;
-                    // 1.0 请求cwd
-                    stream.write_all(CWD_REQUEST.as_bytes()).await?;
                 }
                 "sign up" | "2" | "u" => {
+                    // 向server发送注册信息
                     if let Err(e) = regist(&mut io_reader, &mut stream).await {
                         error!("{}", e);
                     }
                     continue;
                 }
-                "exit" => return Err(Error::new(ErrorKind::ConnectionReset, "")),
                 _ => {
                     error!("invalid arg");
                     return Err(Error::new(ErrorKind::InvalidInput, ""));
@@ -69,21 +53,11 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // 1. 获取cwd
-        stream_buffer = [0; SOCKET_BUFFER_SIZE];
-        let len = stream.read(&mut stream_buffer).await?;
-        if len == 0 {
-            error!("error reading answer from server");
-            return Err(Error::new(ErrorKind::NotConnected, ""));
-        }
-
-        let recv_cwd = String::from_utf8_lossy(&stream_buffer[..len]);
-
-        println!("{}", recv_cwd.replace('\0', ""));
+        println!("{}", cwd);
         print!("({}) $ ", username.trim());
         std::io::stdout().flush()?;
 
-        // 2.0 读取输入
+        // 2.0 读取输入指令
         let mut input = String::new();
         io_reader.read_line(&mut input).await?;
         let input = input.trim();
@@ -92,18 +66,22 @@ async fn main() -> io::Result<()> {
             stream.write_all(EMPTY_INPUT.as_bytes()).await?;
             continue;
         }
-        if input.trim() == EXIT_MSG {
-            stream.write_all(input.as_bytes()).await?;
-            return Ok(());
-        }
-        if input.to_lowercase().trim() == HELP_REQUEST {
-            print_help();
-            stream.write_all(EMPTY_INPUT.as_bytes()).await?;
-            continue;
+        match input.to_uppercase().trim() {
+            EXIT_MSG => {
+                stream.write_all(EXIT_MSG.as_bytes()).await?;
+                return Ok(());
+            }
+            HELP_REQUEST => {
+                print_help();
+                stream.write_all(EMPTY_INPUT.as_bytes()).await?;
+                continue;
+            }
+            _ => {}
         }
 
-        // 2.1 将指令发给server
-        stream.write_all(input.as_bytes()).await?;
+        // 2.1 将cwd+指令发给server
+        let cmd = [&cwd, " ", input].concat();
+        stream.write_all(cmd.as_bytes()).await?;
 
         // 2.3 读取返回信息，如果是需要继续输入信息的，则回复，否则不回复
         stream_buffer = [0; SOCKET_BUFFER_SIZE];
@@ -139,7 +117,13 @@ async fn main() -> io::Result<()> {
                 // -->跳转到3.
             }
             // 4. 本次指令执行完毕
-            COMMAND_FINISHED => continue,
+            COMMAND_FINISHED => {
+                if input.starts_with("cd") {
+                    // 处理cwd情况
+                    deal_with_dir(input, &mut cwd);
+                }
+                continue;
+            }
             _ => {
                 panic!("{}", msg);
             }
@@ -152,8 +136,8 @@ async fn main() -> io::Result<()> {
             return Err(Error::new(ErrorKind::NotConnected, ""));
         }
         let msg = String::from_utf8_lossy(&stream_buffer).replace('\0', "");
+        // 4 宣告结束，否则打印错误信息
         if msg.trim() != COMMAND_FINISHED {
-            // 4 宣告结束
             println!("{}", msg);
         }
     }
@@ -229,7 +213,6 @@ async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<Strin
         inputs.push_str(&line);
         line.clear();
     }
-    info!("get intputs: --->[{}]<---", inputs);
     Ok(inputs)
 }
 
@@ -244,4 +227,27 @@ fn print_help() {
     println!("copy (<host>)[src path] [dst path]");
     println!("check");
     println!("EXIT");
+}
+
+fn deal_with_dir(input: &str, cwd: &mut String) {
+    // 在shell本地处理cwd
+    let path = input.split_whitespace().collect::<Vec<&str>>()[1];
+    //将路径分割为多段
+    let mut paths: Vec<&str> = path.split('/').collect();
+    if paths[0] == "~" {
+        cwd.clear();
+        cwd.push('~');
+        paths.remove(0);
+    }
+    // 调整当前目录
+    for &path in &paths {
+        match path {
+            "." => {}
+            ".." => {
+                let idx = cwd.rfind('/').unwrap();
+                cwd.replace_range(idx.., "");
+            }
+            _ => cwd.push_str(&["/", path].concat()),
+        }
+    }
 }

@@ -82,7 +82,9 @@ impl Inode {
         assert_eq!(DATA_START_BLOCK, root.addr[0] as usize);
 
         let current_dirent = DirEntry::create_dot(&mut root).await;
-        let _ = write_block(&current_dirent, root.addr[0] as usize, 0).await;
+        write_block(&current_dirent, root.addr[0] as usize, 0)
+            .await
+            .unwrap();
         root.cache().await;
         root
     }
@@ -115,7 +117,7 @@ impl Inode {
         if let InodeType::Diretory = inode_type {
             // 申请两个目录项并存放到块中
             let dirs = DirEntry::create_diretory(&mut inode, parent_inode).await;
-            let _ = write_block(&dirs, inode.addr[0] as usize, 0).await;
+            write_block(&dirs, inode.addr[0] as usize, 0).await.unwrap();
         }
         // 写入缓存块
         inode.cache().await;
@@ -145,40 +147,44 @@ impl Inode {
         for i in 0..DIRECT_BLOCK_NUM {
             let id = self.addr[i] as usize;
             if id == 0 {
-                return;
+                break;
             }
             dealloc_data_bit(id).await;
         }
 
-        //2.1 dealloc一级块
+        //2.1 dealloc一级块中的每个直接块
         let first_id = self.get_first_id();
         if first_id == 0 {
             return;
         }
-        dealloc_data_bit(first_id).await;
-        //2.2 然后dealloc一级块中的每个直接块
         dealloc_first_blocks(first_id).await;
+        //2.2 然后dealloc一级块自身 并清除位图占用
+        dealloc_data_bit(first_id).await;
 
-        //3.1 dealloc二级块
         let second_id = self.get_second_id();
         if second_id == 0 {
             return;
         }
-        dealloc_data_bit(second_id).await;
-        //3.2 再dealloc二级块的一级块
+        // 记录二级块中的一级间址
         let mut first_ids = Vec::new();
         for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
             let start = i * BLOCK_ADDR_SIZE;
             let end = start + BLOCK_ADDR_SIZE;
             let first_block = get_block_buffer(second_id, start, end).await.unwrap();
             let first_id: u32 = bincode::deserialize(&first_block).unwrap();
+            if first_id == 0 {
+                break; // 完成了，跳出
+            }
             first_ids.push(first_id);
-            dealloc_data_bit(first_id as usize).await;
         }
-        //3.3 最后dealloc二级块中的每个一级块的直接块
         for first_id in &first_ids {
+            //3.1 dealloc 二级块中的每个一级块所指向的直接块
             dealloc_first_blocks(*first_id as usize).await;
+            //3.2 dealloc 二级块中的每个一级块自身
+            dealloc_data_bit(*first_id as usize).await;
         }
+        //3.3 dealloc 二级块自身
+        dealloc_data_bit(second_id).await;
     }
 
     pub fn get_first_id(&self) -> usize {
@@ -244,14 +250,11 @@ impl Inode {
             self.set_first_id(first_id);
 
             // 在一级间接块中申请需要的数据块地址
-            let mut direct_addrs = Vec::new();
-            for _ in 0..first_nums {
+            for i in 0..first_nums {
                 let id = alloc_bit(ty).await? + start;
-                direct_addrs.push(id);
+                // 将申请得到的直接块地址写入间接块中
+                write_block(&id, first_id as usize, i * 4).await?;
             }
-
-            // 将申请得到的直接块地址写入间接块中
-            write_block(&direct_addrs, first_id as usize, 0).await?;
         }
 
         // 为二级间接块申请
@@ -261,27 +264,24 @@ impl Inode {
 
             // 计算需要申请的一级块的数量
             let first_nums = second_nums / INDIRECT_ADDR_NUM + 1;
-            let mut first_addrs = Vec::new();
             let mut rest_nums = second_nums;
 
-            for _ in 0..first_nums {
-                // 申请一级间接地址并暂存
+            for i in 0..first_nums {
+                // 申请一级间接地址
                 let first_id = alloc_bit(ty).await? + start;
-                first_addrs.push(first_id);
+                // 将二级间接块申请得到的地址写入二级块中
+                write_block(&first_id, second_id as usize, i * 4).await?;
 
                 // 在一级间接块中申请需要的数据块地址
-                let mut direct_addrs = Vec::new();
-                for _ in 0..min(rest_nums, FISRT_MAX) {
+                for j in 0..min(rest_nums, FISRT_MAX) {
                     let id = alloc_bit(ty).await? + start;
-                    direct_addrs.push(id);
+                    write_block(&id, first_id as usize, j * 4).await?;
+                }
+                if rest_nums < FISRT_MAX {
+                    break;
                 }
                 rest_nums -= FISRT_MAX;
-
-                // 将申请得到的直接块地址写入一级间接块中
-                write_block(&direct_addrs, first_id as usize, 0).await?;
             }
-            // 将二级间接块申请得到的地址写入二级块中
-            write_block(&first_addrs, second_id as usize, 0).await?;
         }
 
         Ok(())
@@ -307,7 +307,7 @@ impl Inode {
         let start_byte = inode_pos * INODE_SIZE;
 
         trace!("write inode {} to block {} cache\n", inode_id, block_id);
-        let _ = write_block(self, block_id, start_byte).await;
+        write_block(self, block_id, start_byte).await.unwrap();
     }
 
     pub async fn linkat(&mut self) {
@@ -366,6 +366,9 @@ async fn dealloc_first_blocks(first_id: usize) {
         let end = start + BLOCK_ADDR_SIZE;
         let direct_block = get_block_buffer(first_id, start, end).await.unwrap();
         let id: u32 = bincode::deserialize(&direct_block).unwrap();
+        if id == 0 {
+            break; // 已经完成了 跳出
+        }
         dealloc_data_bit(id as usize).await;
     }
 }

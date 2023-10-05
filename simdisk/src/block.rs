@@ -346,6 +346,9 @@ async fn get_first_blocks(
         let end = start + BLOCK_ADDR_SIZE;
         let addr_buff = get_block_buffer(first_id as usize, start, end).await?;
         let direct_id: BlockIDType = deserialize(&addr_buff)?;
+        if direct_id == 0 {
+            break; // 为空
+        }
         let buffer = get_direct_block(direct_id).await?;
         v.push((BlockLevel::FirstIndirect, direct_id, buffer));
     }
@@ -362,6 +365,9 @@ async fn get_second_blocks(
         let end = start + BLOCK_ADDR_SIZE;
         let addr_buff = get_block_buffer(second_id as usize, start, end).await?;
         let first_id: BlockIDType = deserialize(&addr_buff)?;
+        if first_id == 0 {
+            break; // 为空，停止
+        }
         let mut buffers = get_first_blocks(first_id).await?;
         for (level, _, _) in &mut buffers {
             *level = BlockLevel::SecondIndirect;

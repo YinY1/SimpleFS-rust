@@ -1,6 +1,6 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     fs::File,
     io::{Error, ErrorKind},
     mem::size_of,
@@ -68,47 +68,49 @@ impl Block {
 }
 
 pub struct BlockCacheManager {
-    pub block_cache: VecDeque<Block>,
-    block_flag: HashSet<usize>,
+    block_id_dq: VecDeque<usize>,
+    pub block_cache: HashMap<usize, Block>,
 }
 
 impl BlockCacheManager {
     pub fn new() -> Self {
         Self {
-            block_cache: VecDeque::new(),
-            block_flag: HashSet::new(),
+            block_id_dq: VecDeque::new(),
+            block_cache: HashMap::new(),
         }
     }
 
     pub async fn sync_and_clear_cache(&mut self) -> Result<(), Error> {
-        for block in &mut self.block_cache {
+        for block in self.block_cache.values_mut() {
             block.sync_block().await?;
         }
+        self.block_id_dq.clear();
         self.block_cache.clear();
-        self.block_flag.clear();
         Ok(())
     }
 }
 /// 将块读入缓存中
 pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut w = blk.write().await;
+
+    if w.block_cache.contains_key(&block_id) {
+        return Ok(());
+    }
+
     let mut block = Block {
         block_id,
         bytes: [0; BLOCK_SIZE],
         modified: false,
     };
-    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-    let mut w = blk.write().await;
-
-    if w.block_flag.contains(&block_id) { // TODO 好像好慢
-        return Ok(());
-    }
 
     let offset = block_id * BLOCK_SIZE;
     match File::open(FS_FILE_NAME) {
         Ok(file) => {
             if file.read_exact_at(&mut block.bytes, offset as u64).is_err() {
-                error!("cannot read buffer at {}", offset);
-                return Ok(());
+                let e = format!("cannot read buffer at {}", offset);
+                error!("{}", e);
+                return Err(Error::new(ErrorKind::AddrNotAvailable, e));
             }
         }
         Err(error) => {
@@ -125,25 +127,26 @@ pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
     }
 
     // 时钟算法管理缓存，队头是刚进来的，队尾是后进来的（方便遍历的时候最快找到刚加入缓存的块）
-    if w.block_cache.len() == BLOCK_CACHE_LIMIT {
+    if w.block_id_dq.len() == BLOCK_CACHE_LIMIT {
         loop {
-            let mut block = w.block_cache.pop_back().unwrap();
+            let first_block_id = w.block_id_dq.pop_back().unwrap();
+            let block = w.block_cache.get_mut(&first_block_id).unwrap();
             if block.modified {
                 // 如果被更改过，则写入本地，标记为没更改 放到队尾
                 block.sync_block().await?;
                 block.modified = false;
-                w.block_cache.push_front(block);
+                w.block_id_dq.push_front(first_block_id);
             } else {
                 // 没有被更改，那么直接抛弃
-                w.block_flag.remove(&block.block_id);
+                w.block_cache.remove(&first_block_id);
                 break;
             }
         }
     }
     // 如果缓冲区没满，那么直接加入就可以了
-    w.block_flag.insert(block_id);
-    w.block_cache.push_front(block);
-    assert!(w.block_cache.len() <= BLOCK_CACHE_LIMIT);
+    w.block_cache.insert(block_id, block);
+    w.block_id_dq.push_front(block_id);
+    assert!(w.block_id_dq.len() <= BLOCK_CACHE_LIMIT);
     trace!("block {} push to cache", block_id);
     Ok(())
 }
@@ -159,12 +162,8 @@ pub async fn get_block_buffer(
 
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let bcm = blk.read().await;
-    for block in &bcm.block_cache {
-        if block.block_id == block_id {
-            return Ok(block.bytes[start_byte..end_byte].to_vec());
-        }
-    }
-    Err(Error::new(ErrorKind::Other, "unreachable"))
+    let block = bcm.block_cache.get(&block_id).unwrap();
+    Ok(block.bytes[start_byte..end_byte].to_vec())
 }
 
 pub async fn write_file_content_to_block(content: String, block_id: usize) -> Result<(), Error> {
@@ -174,17 +173,12 @@ pub async fn write_file_content_to_block(content: String, block_id: usize) -> Re
     read_block_to_cache(block_id).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-
-    for block in &mut bcm.block_cache {
-        if block.block_id == block_id {
-            block.modify_bytes(|bytes_arr| {
-                let end = content.len();
-                bytes_arr[..end].clone_from_slice(content.as_bytes());
-            });
-            return Ok(());
-        }
-    }
-    panic!("unreachable write_block")
+    let block = bcm.block_cache.get_mut(&block_id).unwrap();
+    block.modify_bytes(|bytes_arr| {
+        let end = content.len();
+        bytes_arr[..end].clone_from_slice(content.as_bytes());
+    });
+    Ok(())
 }
 
 /// 将`object`序列化并写入指定的`block_id`中，
@@ -199,26 +193,23 @@ pub async fn write_block<T: serde::Serialize>(
     read_block_to_cache(block_id).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-
-    for block in &mut bcm.block_cache {
-        if block.block_id == block_id {
-            // 将 object 序列化
-            match bincode::serialize(object) {
-                Ok(obj_bytes) => {
-                    let end_byte = obj_bytes.len() + start_byte;
-                    trace!("write block{}, len {}B", block_id, obj_bytes.len());
-                    block.modify_bytes(|bytes_arr| {
-                        bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
-                    });
-                    return Ok(());
-                }
-                Err(err) => {
-                    error!("cannot serialize:{}", err)
-                }
-            }
+    let block = bcm.block_cache.get_mut(&block_id).unwrap();
+    // 将 object 序列化
+    match bincode::serialize(object) {
+        Ok(obj_bytes) => {
+            let end_byte = obj_bytes.len() + start_byte;
+            trace!("write block{}, len {}B", block_id, obj_bytes.len());
+            block.modify_bytes(|bytes_arr| {
+                bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
+            });
+            Ok(())
+        }
+        Err(err) => {
+            let e = format!("cannot serialize:{}", err);
+            error!("{e}");
+            Err(Error::new(ErrorKind::Other, e))
         }
     }
-    panic!("unreachable write_block")
 }
 
 /// 尝试插入一个object到磁盘中
@@ -285,15 +276,10 @@ pub async fn clear_block(block_id: usize) -> Result<(), Error> {
     read_block_to_cache(block_id).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-
-    for block in &mut bcm.block_cache {
-        if block.block_id == block_id {
-            block.bytes = [0; BLOCK_SIZE];
-            block.modified = true;
-            return Ok(());
-        }
-    }
-    panic!("unreachable clear_block");
+    let block = bcm.block_cache.get_mut(&block_id).unwrap();
+    block.bytes = [0; BLOCK_SIZE];
+    block.modified = true;
+    Ok(())
 }
 
 async fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Result<(), Error> {

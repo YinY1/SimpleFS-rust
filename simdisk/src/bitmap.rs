@@ -24,33 +24,30 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
 
         let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
         let mut bcm = blk.write().await;
+        let block = bcm.block_cache.get_mut(&block_id).unwrap();
 
-        for block in &mut bcm.block_cache {
-            if block.block_id == block_id {
-                // 遍历当前块的每个byte, i [0,BLOCK_SIZE)
-                for (i, byte) in block.bytes.iter_mut().enumerate() {
-                    if *byte == 0b11111111 {
-                        continue;
-                    }
-                    // 从高位到低位遍历当前byte的每个bit（从左到右）
-                    for j in 0..8 {
-                        let mask = 0b10000000 >> j;
-                        let bit = *byte & mask;
-                        if bit == 0 {
-                            // 找到空闲bit
-                            let id = ((n * BLOCK_SIZE + i) * 8 + j) as u32;
-                            if let BitmapType::Data = bitmap_type {
-                                if id as usize >= DATA_NUM {
-                                    // 块id虽然能在位图中表示，但是超出了数据区块的数目
-                                    let err = format!("block id {} out of limit {}", id, DATA_NUM);
-                                    return Err(Error::new(ErrorKind::OutOfMemory, err));
-                                }
-                            }
-                            block.modify_bytes(|bytes_arr| bytes_arr[i] |= mask);
-                            trace!("alloc id {} for a {:?}", id, bitmap_type);
-                            return Ok(id);
+        // 遍历当前块的每个byte, i [0,BLOCK_SIZE)
+        for (i, byte) in block.bytes.iter_mut().enumerate() {
+            if *byte == 0b11111111 {
+                continue;
+            }
+            // 从高位到低位遍历当前byte的每个bit（从左到右）
+            for j in 0..8 {
+                let mask = 0b10000000 >> j;
+                let bit = *byte & mask;
+                if bit == 0 {
+                    // 找到空闲bit
+                    let id = ((n * BLOCK_SIZE + i) * 8 + j) as u32;
+                    if let BitmapType::Data = bitmap_type {
+                        if id as usize >= DATA_NUM {
+                            // 块id虽然能在位图中表示，但是超出了数据区块的数目
+                            let err = format!("block id {} out of limit {}", id, DATA_NUM);
+                            return Err(Error::new(ErrorKind::OutOfMemory, err));
                         }
                     }
+                    block.modify_bytes(|bytes_arr| bytes_arr[i] |= mask);
+                    trace!("alloc id {} for a {:?}", id, bitmap_type);
+                    return Ok(id);
                 }
             }
         }
@@ -91,23 +88,18 @@ async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usi
     read_block_to_cache(bitmap_block_id).await.unwrap();
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-
-    for block in &mut bcm.block_cache {
-        if block.block_id == bitmap_block_id {
-            let byte = &mut block.bytes[inner_byte_pos];
-            // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
-            let mask = 0b10000000 >> bit_pos;
-            if (*byte & mask) != 0 {
-                // 将该bit置0表示空闲
-                block.modify_bytes(|bytes_arr| bytes_arr[inner_byte_pos] &= !mask);
-                return true;
-            } else {
-                //该位bit没有占用 不需要dealloc
-                return false;
-            }
-        }
+    let block = bcm.block_cache.get_mut(&bitmap_block_id).unwrap();
+    let byte = &mut block.bytes[inner_byte_pos];
+    // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
+    let mask = 0b10000000 >> bit_pos;
+    if (*byte & mask) != 0 {
+        // 将该bit置0表示空闲
+        block.modify_bytes(|bytes_arr| bytes_arr[inner_byte_pos] &= !mask);
+        true
+    } else {
+        //该位bit没有占用 不需要dealloc
+        false
     }
-    panic!("unreachable");
 }
 
 pub async fn clear_bitmaps() {
@@ -120,11 +112,9 @@ pub async fn clear_bitmaps() {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
     for id in v {
-        for block in &mut bcm.block_cache {
-            if block.block_id == id {
-                block.modify_bytes(|bytes| bytes[..BLOCK_SIZE].copy_from_slice(&[0u8; BLOCK_SIZE]));
-            }
-        }
+        let block = bcm.block_cache.get_mut(&id).unwrap();
+        block.bytes = [0; BLOCK_SIZE];
+        block.modified = true;
     }
 }
 

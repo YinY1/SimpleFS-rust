@@ -11,6 +11,7 @@ use crate::{
     user,
 };
 
+/// 创建文件，存在同名文件时err
 pub async fn create_file(
     name: &str,
     mode: FileMode,
@@ -23,7 +24,11 @@ pub async fn create_file(
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    if dirent.get_block_id(parent_inode).await.is_ok() {
+    if dirent
+        .get_block_id_and_try_update(parent_inode)
+        .await
+        .is_ok()
+    {
         return Err(Error::new(ErrorKind::AlreadyExists, "file already exists"));
     }
 
@@ -70,11 +75,12 @@ pub async fn create_file(
     Ok(())
 }
 
+/// 删除文件，不存在时err
 pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    match dirent.get_block_id(parent_inode).await {
+    match dirent.get_block_id_and_try_update(parent_inode).await {
         Err(err) => Err(err),
         Ok((level, block_id)) => {
             let mut inode = Inode::read(dirent.inode_id as usize).await?;
@@ -93,11 +99,16 @@ pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Resu
     }
 }
 
-pub async fn open_file(name: &str, parent_inode: &Inode) -> Result<String, Error> {
+/// 获取文件内容
+pub async fn get_file_content(name: &str, parent_inode: &Inode) -> Result<String, Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;
-    if dirent.get_block_id(parent_inode).await.is_err() {
+    if dirent
+        .get_block_id_and_try_update(parent_inode)
+        .await
+        .is_err()
+    {
         Err(Error::new(ErrorKind::NotFound, "no such file"))
     } else if dirent.is_dir {
         Err(Error::new(

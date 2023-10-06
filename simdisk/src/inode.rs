@@ -28,7 +28,7 @@ pub struct Inode {
     uid: u16,       // 用户id
     size: u32,      // 文件大小
     time_info: u64, // 时间戳
-    // 8个直接，1个一级，一个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【地址】
+    // 8个直接，1个一级，1个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【32位地址】
     pub addr: [BlockIDType; ADDR_TOTAL_SIZE],
 }
 
@@ -116,7 +116,7 @@ impl Inode {
 
         if let InodeType::Diretory = inode_type {
             // 申请两个目录项并存放到块中
-            let dirs = DirEntry::create_diretory(&mut inode, parent_inode).await;
+            let dirs = DirEntry::create_special_diretories(&mut inode, parent_inode).await;
             write_block(&dirs, inode.addr[0] as usize, 0).await.unwrap();
         }
         // 写入缓存块
@@ -124,7 +124,12 @@ impl Inode {
         Ok(inode)
     }
 
-    pub async fn alloc_dir(parent_inode: &mut Inode, gid: u16, uid: u16) -> Result<Self, Error> {
+    /// 申请一个目录项的inode
+    pub async fn alloc_dir_inode(
+        parent_inode: &mut Inode,
+        gid: u16,
+        uid: u16,
+    ) -> Result<Self, Error> {
         Self::alloc(
             InodeType::Diretory,
             parent_inode,
@@ -187,18 +192,22 @@ impl Inode {
         dealloc_data_bit(second_id).await;
     }
 
+    /// 获取一级块id
     pub fn get_first_id(&self) -> usize {
         self.addr[DIRECT_BLOCK_NUM] as usize
     }
 
+    /// 设置一级块id
     pub fn set_first_id(&mut self, first_id: BlockIDType) {
         self.addr[DIRECT_BLOCK_NUM] = first_id;
     }
 
+    /// 获取二级块id
     pub fn get_second_id(&self) -> usize {
         self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] as usize
     }
 
+    /// 设置一级块id
     pub fn set_second_id(&mut self, second_id: BlockIDType) {
         self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] = second_id;
     }
@@ -310,11 +319,13 @@ impl Inode {
         write_block(self, block_id, start_byte).await.unwrap();
     }
 
+    /// 添加硬连接数
     pub async fn linkat(&mut self) {
         self.nlink += 1;
         self.cache().await;
     }
 
+    /// 减小硬连接数
     pub async fn unlinkat(&mut self) {
         self.nlink -= 1;
         self.cache().await;
@@ -334,22 +345,28 @@ impl Inode {
                 name.push('/');
             }
             if detail {
+                // 获取dirent的各种信息
                 let inode = Self::read(dir.inode_id as usize).await.unwrap();
                 let addr = inode.addr[0] as usize * BLOCK_SIZE;
                 let time = cal_date(inode.time_info);
                 let fs = Arc::clone(&SFS);
                 let fs_read_lock = fs.read().await;
                 let username = fs_read_lock.get_username(inode.uid).unwrap();
+                // 对于权限不足的用户展示只读，否则展示原本的模式
                 let mode = if user::able_to_modify(fs_read_lock.current_user.gid, inode.gid) {
                     inode.mode
                 } else {
                     FileMode::RDONLY
                 };
 
-                let infos = format!(
-                    "\taddr:{:#x}\tcreated: {:#?}\t{:?}\t\tBy: {:?}",
+                let mut infos = format!(
+                    "\taddr:{:#x}\tcreated: {:#?}\t{:?}  \tBy: {:?}",
                     addr, time, mode, username,
                 );
+                if !dir.is_dir {
+                    // 是文件 加上文件大小
+                    infos.push_str(&format!("\t{}KiB", inode.size));
+                }
                 name.push_str(&infos);
             }
             dir_infos.push_str(&name);
@@ -360,6 +377,7 @@ impl Inode {
     }
 }
 
+/// dealloc 一级块以及其拥有的直接块
 async fn dealloc_first_blocks(first_id: usize) {
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;

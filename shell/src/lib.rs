@@ -21,6 +21,7 @@ pub const READY_RECEIVE_CONTENTS: &str = "READY!";
 pub const HELP_REQUEST:&str = "HELP";
 pub const SOCKET_BUFFER_SIZE: usize = 128;
 
+/// 通过8081发送长内容，送达后关闭socket
 pub async fn send_content(content: String) -> io::Result<()> {
     let mut stream;
     let mut retry = 0;
@@ -44,6 +45,7 @@ pub async fn send_content(content: String) -> io::Result<()> {
     stream.shutdown().await
 }
 
+/// 开始临时监听8081，接受长内容，完成后关闭socket
 pub async fn receive_content() -> io::Result<String> {
     let (mut socket, _) = TcpListener::bind(CONTENT_SOCKET_ADDR)
         .await?

@@ -76,7 +76,7 @@ pub async fn dealloc_data_bit(block_id: usize) -> bool {
 
     match dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos).await {
         true => {
-            let _ = clear_block(block_id).await;
+            clear_block(block_id).await.unwrap();
             true
         }
         false => false,

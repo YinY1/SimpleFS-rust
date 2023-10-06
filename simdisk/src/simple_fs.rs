@@ -22,7 +22,6 @@ pub struct SampleFileSystem {
     pub root_inode: Inode,
     pub super_block: SuperBlock,
     pub current_inode: Inode,
-    //pub cwd: String,
     pub user_infos: User,
     pub current_user: UserIdGroup,
 }
@@ -90,7 +89,7 @@ impl SampleFileSystem {
         // 初始化用户信息
         let user_info = User::init().await;
 
-        // 将刚才的各种缓存写入本地文件
+        // 更新缓存
         blk.write().await.sync_and_clear_cache().await.unwrap();
 
         *self = Self {
@@ -102,22 +101,25 @@ impl SampleFileSystem {
         };
     }
 
-    // 重置超级块
-    pub async fn check(&mut self) {
+    /// 重置超级块
+    pub async fn reset_sp(&mut self) {
         let sp = SuperBlock::new().await;
         self.super_block = sp;
     }
 
+    /// 登录
     pub fn sign_in(&mut self, username: &str, password: &str) -> Result<(), Error> {
         let info = self.user_infos.sign_in(username, password)?;
         self.current_user = info;
         Ok(())
     }
 
+    /// 注册
     pub async fn sign_up(&mut self, username: &str, password: &str) -> Result<(), Error> {
         self.user_infos.sign_up(username, password).await
     }
 
+    /// root态下获取所有用户的信息
     pub fn get_users_info(&self) -> Result<UserInfo, Error> {
         if self.current_user.gid != 0 {
             Err(Error::new(
@@ -129,17 +131,18 @@ impl SampleFileSystem {
         }
     }
 
+    /// 根据uid获取用户名
     pub fn get_username(&self, uid: u16) -> Result<String, Error> {
         self.user_infos.get_user_name(uid)
     }
 }
 
+/// 创建100MB空文件
 pub fn create_fs_file() -> Result<(), Error> {
-    // 创建100MB空文件
-    let mut fs_file = File::create(FS_FILE_NAME)?;
-    fs_file.write_all(&[0u8; FS_SIZE])
+    File::create(FS_FILE_NAME)?.write_all(&[0u8; FS_SIZE])
 }
 
+// 全局变量，管理各种信息
 lazy_static! {
     pub static ref SFS: Arc<RwLock<SampleFileSystem>> =
         Arc::new(RwLock::new(SampleFileSystem::default()));

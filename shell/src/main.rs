@@ -202,6 +202,7 @@ async fn regist(io_reader: &mut BufReader<Stdin>, stream: &mut TcpStream) -> io:
     Ok(())
 }
 
+/// 从标准输入读取长内容
 async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<String> {
     let mut line = String::new();
     let mut inputs = String::new();

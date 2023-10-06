@@ -1,3 +1,4 @@
 /target
 SIMPLE_FS
 Cargo.lock
+*.txt

@@ -71,23 +71,27 @@ impl DirEntry {
         }
     }
 
+    /// 临时的dirent用于比较文件名是否相等
     pub fn new_temp(filename: &str, extension: &str, is_dir: bool) -> Result<Self, Error> {
         Self::new(filename, extension, is_dir, 0)
     }
 
+    /// 创建特殊目录.
     pub async fn create_dot(inode: &mut Inode) -> Self {
         let dirent = Self::new(".", "", true, inode.inode_id).unwrap();
         inode.linkat().await;
         dirent
     }
 
+    /// 创建特殊目录..
     pub async fn create_dot_dot(inode: &mut Inode) -> Self {
         let dirent = Self::new("..", "", true, inode.inode_id).unwrap();
         inode.linkat().await;
         dirent
     }
 
-    pub async fn create_diretory(
+    /// 创建两个特殊目录
+    pub async fn create_special_diretories(
         current_inode: &mut Inode,
         parent_inode: &mut Inode,
     ) -> (Self, Self) {
@@ -97,7 +101,7 @@ impl DirEntry {
         )
     }
 
-    /// 返回一个dirent数组，以及所在的block及其块等级, 以及是否是目录
+    /// 返回一个数组，包含块等级，所在的block id，以及目录项
     pub async fn get_all_dirent(
         inode: &Inode,
     ) -> Result<Vec<(block::BlockLevel, block::BlockIDType, Self)>, Error> {
@@ -123,10 +127,10 @@ impl DirEntry {
 
     /// 查找给定inode下的同名dirent。如果dirent存在，更新其inode id
     /// 返回所在dirent本身所在的block id（而非目录项所指的inode拥有的空间）和level，
-    /// 否则none
+    /// 否则err
     ///
     /// 相当于查找该inode下是否存在给定的dirent
-    pub async fn get_block_id(
+    pub async fn get_block_id_and_try_update(
         &mut self,
         inode: &Inode,
     ) -> Result<(block::BlockLevel, block::BlockIDType), Error> {
@@ -147,7 +151,7 @@ impl DirEntry {
             .ok_or(Error::new(ErrorKind::NotFound, "dirent not found"))
     }
 
-    // 返回dirent的名称 以XXX.abc的形式
+    /// 返回dirent的名称 以XXX.abc的形式
     pub fn get_filename(&self) -> String {
         let name = String::from_utf8_lossy(&self.filename)
             .split('\0')
@@ -235,8 +239,7 @@ impl DirEntry {
     }
     /// 判断是否是特殊目录
     pub fn is_special(&self) -> bool {
-        let name = self.get_filename();
-        name == "." || name == ".."
+        is_special_dir(&self.get_filename())
     }
 }
 
@@ -257,12 +260,16 @@ pub async fn make_directory(
     let (filename, ext) = split_name(name);
     let mut dirent = DirEntry::new_temp(filename, ext, true)?;
     // 判断是否存在同名目录项
-    if dirent.get_block_id(parent_inode).await.is_ok() {
+    if dirent
+        .get_block_id_and_try_update(parent_inode)
+        .await
+        .is_ok()
+    {
         let err = format!("diretory {} already exist", name);
         return Err(Error::new(ErrorKind::AlreadyExists, err));
     }
     // 为新生成的目录项 申请inode
-    let mut new_node = Inode::alloc_dir(parent_inode, gid, uid).await?;
+    let mut new_node = Inode::alloc_dir_inode(parent_inode, gid, uid).await?;
     new_node.linkat().await;
     // 录入新的到的inode id
     dirent.inode_id = new_node.inode_id;
@@ -272,6 +279,7 @@ pub async fn make_directory(
     Ok(())
 }
 
+/// 删除目录
 pub async fn remove_directory(
     name: &str,
     parent_inode: &mut Inode,
@@ -287,7 +295,7 @@ pub async fn remove_directory(
     let (filename, ext) = split_name(name);
     // 创建一个临时dirent来查找同名目录项
     let mut dirent = DirEntry::new_temp(filename, ext, true)?;
-    match dirent.get_block_id(parent_inode).await {
+    match dirent.get_block_id_and_try_update(parent_inode).await {
         // 判断目录是否非空
         Ok((level, block_id)) => {
             //找到了同名目录项
@@ -323,7 +331,7 @@ pub async fn remove_directory(
                     }
                 }
             }
-            debug!("answer is YES, do remove");
+            trace!("answer is YES, do remove");
             remove_object(&dirent, block_id as usize, level, parent_inode).await?;
             dirent.clear_dir().await;
             // 最后dealloc一下目录自己的inode
@@ -357,6 +365,7 @@ pub async fn cd(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// 尝试进入某目录
 async fn try_cd(name: &str, current_inode: &Inode) -> Result<Inode, Error> {
     let (filename, ext) = if is_special_dir(name) {
         (name, "")
@@ -365,7 +374,11 @@ async fn try_cd(name: &str, current_inode: &Inode) -> Result<Inode, Error> {
     };
     let mut dirent = DirEntry::new_temp(filename, ext, true)?;
     // 判断是否存在同名目录项
-    if dirent.get_block_id(current_inode).await.is_ok() {
+    if dirent
+        .get_block_id_and_try_update(current_inode)
+        .await
+        .is_ok()
+    {
         //找到了同名目录项
         let target_inode = Inode::read(dirent.inode_id as usize).await?;
         if let InodeType::File = target_inode.inode_type {

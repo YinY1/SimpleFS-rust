@@ -42,6 +42,7 @@ impl Block {
         self.modified = true;
     }
 
+    /// 将块缓存写入本地文件
     async fn sync_block(&mut self) -> Result<(), Error> {
         if self.modified {
             if let Ok(mut file) = tokio::fs::OpenOptions::new()
@@ -72,6 +73,7 @@ impl BlockCacheManager {
         }
     }
 
+    /// 将所有块缓存写入磁盘，同时清空缓存
     pub async fn sync_and_clear_cache(&mut self) -> Result<(), Error> {
         for block in self.block_cache.values_mut() {
             block.sync_block().await?;
@@ -80,6 +82,7 @@ impl BlockCacheManager {
         Ok(())
     }
 }
+
 /// 将块读入缓存中
 pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
@@ -119,7 +122,6 @@ pub async fn get_block_buffer(
 ) -> Result<Vec<u8>, Error> {
     // 当块不在缓存中时 读入缓存
     read_block_to_cache(block_id).await?;
-
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let bcm = blk.read().await;
     let block = bcm.block_cache.get(&block_id).unwrap();
@@ -158,6 +160,7 @@ pub async fn write_block<T: serde::Serialize>(
     match bincode::serialize(object) {
         Ok(obj_bytes) => {
             let end_byte = obj_bytes.len() + start_byte;
+            assert!(end_byte <= BLOCK_SIZE);
             trace!("write block{}, len {}B", block_id, obj_bytes.len());
             block.modify_bytes(|bytes_arr| {
                 bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
@@ -204,26 +207,26 @@ pub async fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq
             trace!("add a new first block {}", new_first_id);
             // 将一级地址写回inode中
             inode.set_first_id(new_first_id);
-            alloc_new_first(new_first_id as usize, object).await
+            alloc_new_in_first(new_first_id as usize, object).await
         }
         BlockLevel::FirstIndirect => {
             // 一级间接块的已有的所有直接块没有空间了
             if all_blocks.len() < FISRT_MAX + DIRECT_BLOCK_NUM {
                 // 一级间接块本身还有空间，直接附加
-                alloc_new_first(inode.get_first_id(), object).await
+                alloc_new_in_first(inode.get_first_id(), object).await
             } else {
                 // 一级块没空间了，要找二级块（返回的是最后一块一级块）
                 // 申请一块新的二级块
                 let new_second_id = alloc_bit(BitmapType::Data).await?;
                 // 将二级地址写回inode中
                 inode.set_second_id(new_second_id);
-                alloc_new_second(object, new_second_id as usize).await
+                alloc_new_in_second(new_second_id as usize, object).await
             }
         }
         BlockLevel::SecondIndirect => {
             if all_blocks.len() < SECOND_MAX + FISRT_MAX + DIRECT_BLOCK_NUM {
                 // 最后非空块填满了，申请一块新的一级块
-                return alloc_new_second(object, inode.get_second_id()).await;
+                return alloc_new_in_second(inode.get_second_id(), object).await;
             }
             // 超限
             Err(Error::new(ErrorKind::OutOfMemory, "no valid block"))
@@ -242,14 +245,16 @@ pub async fn clear_block(block_id: usize) -> Result<(), Error> {
     Ok(())
 }
 
-async fn alloc_new_second<T: Serialize>(object: &T, second_id: usize) -> Result<(), Error> {
+/// 在二级块中alloc一块新的一级块，并在新的一级块中alloc一块新块
+async fn alloc_new_in_second<T: Serialize>(second_id: usize, object: &T) -> Result<(), Error> {
     let new_first_block = alloc_bit(BitmapType::Data).await?;
-    alloc_new_first(new_first_block as usize, object).await?;
+    alloc_new_in_first(new_first_block as usize, object).await?;
     try_insert_to_block(&new_first_block, second_id).await?;
     Ok(())
 }
 
-async fn alloc_new_first<T: Serialize>(first_id: usize, object: &T) -> Result<(), Error> {
+/// 在新的一级块中alloc一块新块
+async fn alloc_new_in_first<T: Serialize>(first_id: usize, object: &T) -> Result<(), Error> {
     // 申请一块新块
     let new_block_id = alloc_bit(BitmapType::Data).await?;
     trace!("add a new block {}", new_block_id);
@@ -259,7 +264,7 @@ async fn alloc_new_first<T: Serialize>(first_id: usize, object: &T) -> Result<()
     try_insert_to_block(&new_block_id, first_id).await
 }
 
-// 尝试写入该block的空闲位置，失败（空间不足）则返回none
+// 尝试写入该block的空闲位置，失败（空间不足）则返回Err
 async fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + PartialEq>(
     object: &T,
     block_id: usize,
@@ -288,7 +293,7 @@ async fn get_direct_block(id: BlockIDType) -> Result<Vec<u8>, Error> {
 }
 
 /// 获取一个一级块所包含的所有直接块
-async fn get_first_blocks(
+async fn get_blocks_of_first(
     first_id: BlockIDType,
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
@@ -307,7 +312,7 @@ async fn get_first_blocks(
 }
 
 /// 获取一个二级块所包含的所有直接块
-async fn get_second_blocks(
+async fn get_blocks_of_second(
     second_id: BlockIDType,
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
@@ -319,7 +324,7 @@ async fn get_second_blocks(
         if first_id == 0 {
             break; // 为空，停止
         }
-        let mut buffers = get_first_blocks(first_id).await?;
+        let mut buffers = get_blocks_of_first(first_id).await?;
         for (level, _, _) in &mut buffers {
             *level = BlockLevel::SecondIndirect;
         }
@@ -348,14 +353,14 @@ pub async fn get_all_blocks(
     if first_id == 0 {
         return Ok(v);
     }
-    v.append(&mut get_first_blocks(first_id).await?);
+    v.append(&mut get_blocks_of_first(first_id).await?);
 
     // 二级
     let second_id = inode.get_second_id() as BlockIDType;
     if second_id == 0 {
         return Ok(v);
     }
-    v.append(&mut get_second_blocks(second_id).await?);
+    v.append(&mut get_blocks_of_second(second_id).await?);
 
     Ok(v)
 }
@@ -513,14 +518,13 @@ pub enum BlockLevel {
 
 /// 清空块缓存，写入磁盘中
 pub async fn sync_all_block_cache() -> Result<(), Error> {
-    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-    let mut blk_w = blk.write().await;
-    blk_w.sync_and_clear_cache().await?;
-    drop(blk_w);
+    Arc::clone(&BLOCK_CACHE_MANAGER)
+        .write()
+        .await
+        .sync_and_clear_cache()
+        .await?;
     // 重新读取已写入的信息
-    let fs = Arc::clone(&SFS);
-    let mut w = fs.write().await;
-    w.update().await;
+    Arc::clone(&SFS).write().await.update().await;
     trace!("sync all blocks ok");
     Ok(())
 }

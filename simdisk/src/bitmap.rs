@@ -102,22 +102,6 @@ async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usi
     }
 }
 
-pub async fn clear_bitmaps() {
-    // 读取bitmap
-    for id in INODE_BITMAP_START_BLOCK..DATA_BITMAP_START_BLOCK + DATA_BITMAP_NUM {
-        read_block_to_cache(id).await.unwrap();
-    }
-    let v: Vec<usize> =
-        (INODE_BITMAP_START_BLOCK..DATA_BITMAP_START_BLOCK + DATA_BITMAP_NUM).collect();
-    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-    let mut bcm = blk.write().await;
-    for id in v {
-        let block = bcm.block_cache.get_mut(&id).unwrap();
-        block.bytes = [0; BLOCK_SIZE];
-        block.modified = true;
-    }
-}
-
 async fn count_bits(bitmap_type: BitmapType) -> usize {
     let (start_id, block_nums) = match bitmap_type {
         BitmapType::Inode => (INODE_BITMAP_START_BLOCK, INODE_BITMAP_NUM),

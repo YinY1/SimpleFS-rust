@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::RwLock;
 
 use crate::{
-    bitmap::{self, count_data_blocks, count_inodes},
+    bitmap::{count_data_blocks, count_inodes},
     block::BLOCK_CACHE_MANAGER,
     fs_constants::*,
     inode::Inode,
@@ -75,7 +75,12 @@ impl SampleFileSystem {
     /// 强制覆盖一份新的FS文件，可以看作是格式化
     pub async fn force_clear(&mut self) {
         info!("init fs");
-        bitmap::clear_bitmaps().await;
+        create_fs_file().unwrap();
+
+        // 单纯清空缓存，不写入本地文件，用于格式化
+        let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+        blk.write().await.block_cache.clear();
+
         // 创建超级块
         let super_block = SuperBlock::new().await;
 
@@ -85,9 +90,8 @@ impl SampleFileSystem {
         // 初始化用户信息
         let user_info = User::init().await;
 
-        let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-        let mut w = blk.write().await;
-        w.sync_and_clear_cache().await.unwrap();
+        // 将刚才的各种缓存写入本地文件
+        blk.write().await.sync_and_clear_cache().await.unwrap();
 
         *self = Self {
             current_inode: root_inode.clone(),
@@ -95,7 +99,7 @@ impl SampleFileSystem {
             super_block,
             user_infos: user_info,
             current_user: UserIdGroup::default(),
-        }
+        };
     }
 
     // 重置超级块
@@ -130,12 +134,10 @@ impl SampleFileSystem {
     }
 }
 
-pub fn create_fs_file() {
+pub fn create_fs_file() -> Result<(), Error> {
     // 创建100MB空文件
-    let mut fs_file = File::create(FS_FILE_NAME).expect("cannot create fs file");
-    fs_file
-        .write_all(&[0u8; FS_SIZE])
-        .expect("cannot init fs file");
+    let mut fs_file = File::create(FS_FILE_NAME)?;
+    fs_file.write_all(&[0u8; FS_SIZE])
 }
 
 lazy_static! {

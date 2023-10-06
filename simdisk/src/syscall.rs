@@ -160,19 +160,22 @@ pub async fn copy(
 }
 
 pub async fn check() -> Result<(), Error> {
-    SFS.write().await.check().await;
+    let fs = Arc::clone(&SFS);
+    fs.write().await.check().await;
     trace!("finished cmd: check");
     Ok(())
 }
 
 pub async fn get_users_info() -> Result<Option<String>, Error> {
-    let users = SFS.read().await.get_users_info()?;
+    let fs = Arc::clone(&SFS);
+    let users = fs.read().await.get_users_info()?;
     trace!("finished cmd: users");
     Ok(Some(format!("{:#?}", users)))
 }
 
 pub async fn formatting() -> Result<(), Error>{
-    SFS.write().await.force_clear().await;
+    let fs = Arc::clone(&SFS);
+    fs.write().await.force_clear().await;
     trace!("finished cmd: formatting");
     Ok(())
 }

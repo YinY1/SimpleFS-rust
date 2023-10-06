@@ -4,10 +4,8 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use simple_fs::SFS;
-
-use crate::block::sync_all_block_cache;
-use crate::inode::FileMode;
-use crate::simple_fs::create_fs_file;
+use block::sync_all_block_cache;
+use inode::FileMode;
 use shell::*;
 
 mod bitmap;
@@ -36,7 +34,6 @@ async fn main() -> io::Result<()> {
     let fs = Arc::clone(&SFS);
     let mut w = fs.write().await;
     if w.init().await.is_err() {
-        create_fs_file();
         w.force_clear().await;
         info!("SFS init successfully");
     };

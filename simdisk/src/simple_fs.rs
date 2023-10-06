@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::RwLock;
 
 use crate::{
-    bitmap::{count_data_blocks, count_inodes},
+    bitmap::{self, count_data_blocks, count_inodes},
     block::BLOCK_CACHE_MANAGER,
     fs_constants::*,
     inode::Inode,
@@ -75,6 +75,7 @@ impl SampleFileSystem {
     /// 强制覆盖一份新的FS文件，可以看作是格式化
     pub async fn force_clear(&mut self) {
         info!("init fs");
+        bitmap::clear_bitmaps().await;
         // 创建超级块
         let super_block = SuperBlock::new().await;
 

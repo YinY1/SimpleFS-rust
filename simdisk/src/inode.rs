@@ -263,7 +263,7 @@ impl Inode {
             self.addr[DIRECT_BLOCK_NUM + FIRST_INDIRECT_NUM] = second_id;
 
             // 计算需要申请的一级块的数量
-            let first_nums = second_nums / INDIRECT_ADDR_NUM + 1;
+            let first_nums = (second_nums - 1) / INDIRECT_ADDR_NUM + 1;
             let mut rest_nums = second_nums;
 
             for i in 0..first_nums {

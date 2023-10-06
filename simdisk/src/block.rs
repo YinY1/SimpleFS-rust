@@ -1,6 +1,6 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs::File,
     io::{Error, ErrorKind},
     mem::size_of,
@@ -69,12 +69,14 @@ impl Block {
 
 pub struct BlockCacheManager {
     pub block_cache: VecDeque<Block>,
+    block_flag: HashSet<usize>,
 }
 
 impl BlockCacheManager {
     pub fn new() -> Self {
         Self {
             block_cache: VecDeque::new(),
+            block_flag: HashSet::new(),
         }
     }
 
@@ -83,6 +85,7 @@ impl BlockCacheManager {
             block.sync_block().await?;
         }
         self.block_cache.clear();
+        self.block_flag.clear();
         Ok(())
     }
 }
@@ -96,7 +99,7 @@ pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut w = blk.write().await;
 
-    if w.block_cache.contains(&block) {
+    if w.block_flag.contains(&block_id) { // TODO 好像好慢
         return Ok(());
     }
 
@@ -132,11 +135,13 @@ pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
                 w.block_cache.push_front(block);
             } else {
                 // 没有被更改，那么直接抛弃
+                w.block_flag.remove(&block.block_id);
                 break;
             }
         }
     }
     // 如果缓冲区没满，那么直接加入就可以了
+    w.block_flag.insert(block_id);
     w.block_cache.push_front(block);
     assert!(w.block_cache.len() <= BLOCK_CACHE_LIMIT);
     trace!("block {} push to cache", block_id);

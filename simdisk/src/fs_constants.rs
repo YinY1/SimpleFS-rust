@@ -21,7 +21,7 @@ pub const INODE_BLOCK_NUM: usize = 1024 / BLOCK_SIZE * INODE_SIZE; // inode 区�
 pub const DATA_NUM: usize =
     FS_SIZE / BLOCK_SIZE - INODE_BLOCK_NUM - DATA_BITMAP_NUM - INODE_BITMAP_NUM - 1;
 
-pub const BLOCK_CACHE_LIMIT: usize = 1024*35; // 块缓冲区大小（块数量*1KB）
+// pub const BLOCK_CACHE_LIMIT: usize = 1024*35; // 块缓冲区大小（块数量*1KB）
 
 //* 块号分配 */
 pub const INODE_BITMAP_START_BLOCK: usize = INODE_BITMAP_NUM; // inode bitmap起始块号

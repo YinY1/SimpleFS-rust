@@ -53,7 +53,7 @@ impl SampleFileSystem {
             self.read().await;
             return Ok(());
         }
-        Err(Error::new(std::io::ErrorKind::Other, ""))
+        Err(Error::new(std::io::ErrorKind::Other, "sp broken"))
     }
 
     /// 打印文件系统的信息

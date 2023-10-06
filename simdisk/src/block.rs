@@ -1,6 +1,6 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     fs::File,
     io::{Error, ErrorKind},
     mem::size_of,
@@ -53,14 +53,8 @@ impl Block {
                 trace!("drop block {}", self.block_id);
                 let offset = self.block_id * BLOCK_SIZE;
                 let pos = tokio::io::SeekFrom::Start(offset as u64);
-                file.seek(pos)
-                    .await
-                    .map_err(|err| error!("error seek blocks:{}", err))
-                    .unwrap();
-                file.write_all(&buf)
-                    .await
-                    .map_err(|err| error!("error writing blocks:{}", err))
-                    .unwrap();
+                file.seek(pos).await?;
+                file.write_all(&buf).await?;
             }
         }
         Ok(())
@@ -68,14 +62,12 @@ impl Block {
 }
 
 pub struct BlockCacheManager {
-    block_id_dq: VecDeque<usize>,
     pub block_cache: HashMap<usize, Block>,
 }
 
 impl BlockCacheManager {
     pub fn new() -> Self {
         Self {
-            block_id_dq: VecDeque::new(),
             block_cache: HashMap::new(),
         }
     }
@@ -84,7 +76,6 @@ impl BlockCacheManager {
         for block in self.block_cache.values_mut() {
             block.sync_block().await?;
         }
-        self.block_id_dq.clear();
         self.block_cache.clear();
         Ok(())
     }
@@ -113,40 +104,9 @@ pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
                 return Err(Error::new(ErrorKind::AddrNotAvailable, e));
             }
         }
-        Err(error) => {
-            match error.kind() {
-                ErrorKind::NotFound => {
-                    trace!("File not found");
-                }
-                _ => {
-                    error!("Error opening file: {}", error);
-                }
-            };
-            return Ok(());
-        }
+        Err(error) => return Err(error),
     }
-
-    // 时钟算法管理缓存，队头是刚进来的，队尾是后进来的（方便遍历的时候最快找到刚加入缓存的块）
-    if w.block_id_dq.len() == BLOCK_CACHE_LIMIT {
-        loop {
-            let first_block_id = w.block_id_dq.pop_back().unwrap();
-            let block = w.block_cache.get_mut(&first_block_id).unwrap();
-            if block.modified {
-                // 如果被更改过，则写入本地，标记为没更改 放到队尾
-                block.sync_block().await?;
-                block.modified = false;
-                w.block_id_dq.push_front(first_block_id);
-            } else {
-                // 没有被更改，那么直接抛弃
-                w.block_cache.remove(&first_block_id);
-                break;
-            }
-        }
-    }
-    // 如果缓冲区没满，那么直接加入就可以了
     w.block_cache.insert(block_id, block);
-    w.block_id_dq.push_front(block_id);
-    assert!(w.block_id_dq.len() <= BLOCK_CACHE_LIMIT);
     trace!("block {} push to cache", block_id);
     Ok(())
 }

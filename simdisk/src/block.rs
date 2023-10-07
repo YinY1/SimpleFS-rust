@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    bitmap::{alloc_bit, dealloc_data_bit, BitmapType},
+    bitmap::{self, alloc_bit, dealloc_data_bit, BitmapType},
     fs_constants::*,
     inode::Inode,
     simple_fs::SFS,
@@ -502,6 +502,30 @@ pub fn is_empty(block: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// 检查data位图对应的区域是否出错
+pub async fn check_data_and_fix() -> Result<(), Error> {
+    let data_bitmap = bitmap::get_data_bitmaps().await;
+    for (i, byte) in data_bitmap.iter().enumerate() {
+        for j in 0..8 {
+            let mask = 0b10000000 >> j;
+            let bit_id = i * 8 + j;
+            if bit_id >= DATA_NUM {
+                return Ok(());
+            }
+            let block_id = bit_id + DATA_START_BLOCK;
+            if byte & mask == 1 {
+                // 检查对应区域是否为空，为空则置0
+                let block = get_block_buffer(block_id, 0, BLOCK_SIZE).await?;
+                if block.is_empty() {
+                    dealloc_data_bit(block_id).await;
+                    info!("fix data bit:{}", bit_id);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 lazy_static! {

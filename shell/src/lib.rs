@@ -19,6 +19,7 @@ pub const REGIST_SUCCESS: &str = "REGIST SUCCESS";
 pub const RECEIVE_CONTENTS: &str = "RECEIVE CONTENTS";
 pub const READY_RECEIVE_CONTENTS: &str = "READY!";
 pub const HELP_REQUEST:&str = "HELP";
+pub const ERROR_MESSAGE_PREFIX:&str = "ErrMsg:";
 pub const SOCKET_BUFFER_SIZE: usize = 128;
 
 /// 通过8081发送长内容，送达后关闭socket

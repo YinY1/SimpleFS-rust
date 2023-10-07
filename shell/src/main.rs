@@ -113,7 +113,11 @@ async fn main() -> io::Result<()> {
             // 2.3 需要打开文件通道接受内容
             RECEIVE_CONTENTS => {
                 let contents = receive_content().await?;
-                println!("{}", contents);
+                if contents.starts_with(ERROR_MESSAGE_PREFIX) {
+                    error!("{}", contents.strip_prefix(ERROR_MESSAGE_PREFIX).unwrap());
+                } else {
+                    println!("{}", contents);
+                }
                 // -->跳转到3.
             }
             // 4. 本次指令执行完毕

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use simple_fs::SFS;
 use block::sync_all_block_cache;
 use inode::FileMode;
 use shell::*;
+use simple_fs::SFS;
 
 mod bitmap;
 mod block;
@@ -116,7 +116,8 @@ async fn main() -> io::Result<()> {
                     Err(err) => {
                         error!("send err back to socket: {:?}, err= {}", addr, err);
                         socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
-                        send_content(err.to_string()).await.unwrap();
+                        let err_msg = [ERROR_MESSAGE_PREFIX, &err.to_string()].concat();
+                        send_content(err_msg).await.unwrap();
                     }
                 };
                 // 4 宣告结束

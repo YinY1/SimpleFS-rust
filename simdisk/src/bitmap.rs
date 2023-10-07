@@ -56,6 +56,7 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
     Err(Error::new(ErrorKind::OutOfMemory, "no valid bit"))
 }
 
+/// 在inode位图中dealloc对应的bit
 pub async fn dealloc_inode_bit(inode_id: usize) -> bool {
     dealloc_bit(INODE_BITMAP_START_BLOCK, inode_id / 8, inode_id).await
 }
@@ -117,6 +118,28 @@ async fn count_bits(bitmap_type: BitmapType) -> usize {
             .sum::<usize>()
     }
     cnt
+}
+
+async fn get_bitmaps(bitmap_type: BitmapType) -> Vec<u8> {
+    let (start_id, block_nums) = match bitmap_type {
+        BitmapType::Inode => (INODE_BITMAP_START_BLOCK, INODE_BITMAP_NUM),
+        BitmapType::Data => (DATA_BITMAP_START_BLOCK, DATA_BITMAP_NUM),
+    };
+    let mut bitmaps = Vec::new();
+    for i in 0..block_nums {
+        let block_id = start_id + i;
+        let mut bm = get_block_buffer(block_id, 0, BLOCK_SIZE).await.unwrap();
+        bitmaps.append(&mut bm)
+    }
+    bitmaps
+}
+
+pub async fn get_inode_bitmaps() -> Vec<u8> {
+    get_bitmaps(BitmapType::Inode).await
+}
+
+pub async fn get_data_bitmaps() -> Vec<u8> {
+    get_bitmaps(BitmapType::Data).await
 }
 
 #[allow(unused)]

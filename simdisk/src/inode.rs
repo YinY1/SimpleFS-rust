@@ -46,7 +46,7 @@ impl Default for InodeType {
 }
 
 bitflags! {
-    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq,Clone,Default)]
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
     #[serde(transparent)]
     pub struct FileMode:u8{
          /// 只读
@@ -298,11 +298,8 @@ impl Inode {
 
     /// 直接从block读取inode信息
     pub async fn read(inode_id: usize) -> Result<Self, Error> {
-        let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
-        let inode_pos = inode_id % 16;
-        let start_byte = inode_pos * INODE_SIZE;
+        let (block_id, start_byte) = cal_offset(inode_id);
         let end_byte = start_byte + INODE_SIZE;
-
         // 一个Inode 64B
         let buffer = get_block_buffer(block_id, start_byte, end_byte).await?;
         deserialize(&buffer)
@@ -311,10 +308,7 @@ impl Inode {
     ///将inode写入缓存中
     async fn cache(&self) {
         let inode_id = self.inode_id as usize;
-        let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
-        let inode_pos = inode_id % 16;
-        let start_byte = inode_pos * INODE_SIZE;
-
+        let (block_id, start_byte) = cal_offset(inode_id);
         trace!("write inode {} to block {} cache\n", inode_id, block_id);
         write_block(self, block_id, start_byte).await.unwrap();
     }
@@ -377,6 +371,26 @@ impl Inode {
     }
 }
 
+/// 检查inode位图对应的区域是否出错
+pub async fn check_inodes_and_fix() -> Result<(), Error> {
+    let inode_bitmap = bitmap::get_inode_bitmaps().await;
+    for (i, byte) in inode_bitmap.iter().enumerate() {
+        for j in 0..8 {
+            let mask = 0b10000000 >> j;
+            if byte & mask == 1 {
+                // 检查对应区域是否为空，为空则置0
+                let id = i * 8 + j;
+                let inode = Inode::read(id).await?;
+                if inode.inode_id as usize != id {
+                    // 说明对不上，出错了
+                    dealloc_inode_bit(id).await;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// dealloc 一级块以及其拥有的直接块
 async fn dealloc_first_blocks(first_id: usize) {
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
@@ -389,6 +403,13 @@ async fn dealloc_first_blocks(first_id: usize) {
         }
         dealloc_data_bit(id as usize).await;
     }
+}
+
+fn cal_offset(inode_id: usize) -> (usize, usize) {
+    let block_id = inode_id / BLOCK_SIZE + INODE_START_BLOCK;
+    let inode_pos = inode_id % 16;
+    let start_byte = inode_pos * INODE_SIZE;
+    (block_id, start_byte)
 }
 
 fn now_secs() -> u64 {

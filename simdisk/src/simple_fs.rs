@@ -9,9 +9,9 @@ use tokio::sync::RwLock;
 
 use crate::{
     bitmap::{count_data_blocks, count_inodes},
-    block::BLOCK_CACHE_MANAGER,
+    block::{self, BLOCK_CACHE_MANAGER},
     fs_constants::*,
-    inode::Inode,
+    inode::{self, Inode},
     super_block::SuperBlock,
     user::{User, UserIdGroup, UserInfo},
 };
@@ -135,6 +135,12 @@ impl SampleFileSystem {
     pub fn get_username(&self, uid: u16) -> Result<String, Error> {
         self.user_infos.get_user_name(uid)
     }
+}
+
+/// 检查位图对应的区域是否出错
+pub async fn check_bitmaps_and_fix() -> Result<(), Error> {
+    inode::check_inodes_and_fix().await?;
+    block::check_data_and_fix().await
 }
 
 /// 创建100MB空文件

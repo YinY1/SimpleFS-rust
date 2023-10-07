@@ -2,7 +2,12 @@ use std::{future::Future, io::Error, pin::Pin, sync::Arc};
 
 use tokio::net::TcpStream;
 
-use crate::{block::sync_all_block_cache, dirent, file, inode::FileMode, simple_fs::SFS};
+use crate::{
+    block::sync_all_block_cache,
+    dirent, file,
+    inode::FileMode,
+    simple_fs::{self, SFS},
+};
 
 /// 打印
 pub async fn info() -> Result<Option<String>, Error> {
@@ -167,10 +172,11 @@ pub async fn copy(
     Ok(())
 }
 
-/// 查看超级块是否损坏
+/// 查看超级块是否损坏，并查看位图是否出错
 pub async fn check() -> Result<(), Error> {
     let fs = Arc::clone(&SFS);
     fs.write().await.reset_sp().await;
+    simple_fs::check_bitmaps_and_fix().await?;
     trace!("finished cmd: check");
     Ok(())
 }

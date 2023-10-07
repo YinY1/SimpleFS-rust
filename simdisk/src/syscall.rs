@@ -10,11 +10,19 @@ use crate::{
 };
 
 /// 打印
-pub async fn info() -> Result<Option<String>, Error> {
-    let fs = Arc::clone(&SFS);
-    let res = fs.read().await.info().await;
+pub async fn info(cwd: &str) -> Result<Option<String>, Error> {
+    let mut res = None;
+    temp_cd_and_do(&[cwd, "/"].concat(), false, |_| {
+        Box::pin(async {
+            let fs = Arc::clone(&SFS);
+            res = Some(fs.read().await.info().await);
+            Ok(())
+        })
+    })
+    .await?;
+
     trace!("finished cmd: info");
-    Ok(Some(res))
+    Ok(res)
 }
 
 /// 展示目录信息

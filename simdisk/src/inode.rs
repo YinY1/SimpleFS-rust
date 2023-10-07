@@ -341,7 +341,7 @@ impl Inode {
             if detail {
                 // 获取dirent的各种信息
                 let inode = Self::read(dir.inode_id as usize).await.unwrap();
-                let addr = inode.addr[0] as usize * BLOCK_SIZE;
+                let addr = inode.addr;
                 let time = cal_date(inode.time_info);
                 let fs = Arc::clone(&SFS);
                 let fs_read_lock = fs.read().await;
@@ -354,8 +354,8 @@ impl Inode {
                 };
 
                 let mut infos = format!(
-                    "\taddr:{:#x}\tcreated: {:#?}\t{:?}  \tBy: {:?}",
-                    addr, time, mode, username,
+                    "\taddr:{:x?}\t\t\tInode:{}\n\tcreated: {:#?}\t{:?}  \tBy: {:?}",
+                    addr, inode.inode_id, time, mode, username,
                 );
                 if !dir.is_dir {
                     // 是文件 加上文件大小

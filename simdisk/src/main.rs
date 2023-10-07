@@ -166,7 +166,7 @@ async fn do_command(
     } else {
         match commands.len() {
             1 => match commands[0].as_str() {
-                "info" => syscall::info().await,
+                "info" => syscall::info(cwd).await,
                 "check" => syscall::check().await.map(|_| None),
                 "users" => syscall::get_users_info().await,
                 "formatting" => syscall::formatting().await.map(|_| None),

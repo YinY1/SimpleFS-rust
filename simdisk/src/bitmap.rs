@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    block::{clear_block, get_block_buffer, read_block_to_cache, BLOCK_CACHE_MANAGER},
+    block::{
+        clear_blocks, get_block_buffer, read_block_to_cache, read_blocks_to_cache,
+        BLOCK_CACHE_MANAGER,
+    },
     fs_constants::*,
 };
 
@@ -41,7 +44,8 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
                     if let BitmapType::Data = bitmap_type {
                         if id as usize >= DATA_BLOCK_MAX_NUM {
                             // 块id虽然能在位图中表示，但是超出了数据区块的数目
-                            let err = format!("block id {} out of limit {}", id, DATA_BLOCK_MAX_NUM);
+                            let err =
+                                format!("block id {} out of limit {}", id, DATA_BLOCK_MAX_NUM);
                             return Err(Error::new(ErrorKind::OutOfMemory, err));
                         }
                     }
@@ -62,45 +66,55 @@ pub async fn dealloc_inode_bit(inode_id: usize) -> bool {
 }
 
 /// 在对应的位图中dealloc 指定block所占用的bit, 同时清空该block
-pub async fn dealloc_data_bit(block_id: usize) -> bool {
-    let (bit_block_start_id, block_start_id) = (DATA_BITMAP_START_BLOCK, DATA_START_BLOCK);
-    //对应位图（包括所有的块）中的总共第K个bit（从左到右）
-    let bit_id = block_id - block_start_id;
-    //对应位图（包括所有的块）中的总共第K个byte（从左到右）
-    let total_byte_pos = bit_id / 8;
-    //单个byte中的第K个bit（从左到右）
-    let bit_pos = bit_id % 8;
-    //这个bit所在的块的块号（从超级块sp=0开始）
-    let bitmap_block_id = total_byte_pos / BLOCK_SIZE + bit_block_start_id;
-    //在单个块中的第K个byte（从左到右）
-    let inner_byte_pos = total_byte_pos % BLOCK_SIZE;
+pub async fn dealloc_data_bit(block_id: usize) {
+    dealloc_data_bits(&[block_id]).await;
+}
 
-    match dealloc_bit(bitmap_block_id, inner_byte_pos, bit_pos).await {
-        true => {
-            clear_block(block_id).await.unwrap();
-            true
-        }
-        false => false,
+/// 批量清除data block并dealloc
+pub async fn dealloc_data_bits(block_ids: &[usize]) {
+    let mut bit_args = Vec::new();
+    for block_id in block_ids {
+        bit_args.push(cal_bit_args(*block_id));
     }
+    let answers = dealloc_bits(&bit_args).await;
+    let mut block_to_clear = Vec::new();
+    for (i, ans) in answers.iter().enumerate() {
+        if *ans {
+            block_to_clear.push(block_ids[i]);
+        }
+    }
+    clear_blocks(&block_to_clear).await.unwrap();
 }
 
 async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) -> bool {
-    //将含有该bit的位图区域的块读入缓存
-    read_block_to_cache(bitmap_block_id).await.unwrap();
+    let ans = dealloc_bits(&[(bitmap_block_id, inner_byte_pos, bit_pos)]).await;
+    ans[0]
+}
+
+async fn dealloc_bits(bit_args: &[(usize, usize, usize)]) -> Vec<bool> {
+    let ids: Vec<_> = bit_args
+        .iter()
+        .map(|(bitmap_block_id, _, _)| *bitmap_block_id)
+        .collect();
+    read_blocks_to_cache(&ids).await.unwrap();
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-    let block = bcm.block_cache.get_mut(&bitmap_block_id).unwrap();
-    let byte = &mut block.bytes[inner_byte_pos];
-    // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
-    let mask = 0b10000000 >> bit_pos;
-    if (*byte & mask) != 0 {
-        // 将该bit置0表示空闲
-        block.modify_bytes(|bytes_arr| bytes_arr[inner_byte_pos] &= !mask);
-        true
-    } else {
-        //该位bit没有占用 不需要dealloc
-        false
+
+    let mut ans = Vec::new();
+    for (bitmap_block_id, inner_byte_pos, bit_pos) in bit_args {
+        let block = bcm.block_cache.get_mut(bitmap_block_id).unwrap();
+        let byte = &mut block.bytes[*inner_byte_pos];
+        // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
+        let mask = 0b10000000 >> bit_pos;
+        if (*byte & mask) != 0 {
+            // 将该bit置0表示空闲
+            block.modify_bytes(|bytes_arr| bytes_arr[*inner_byte_pos] &= !mask);
+            ans.push(true);
+        } else {
+            ans.push(false)
+        }
     }
+    ans
 }
 
 async fn count_bits(bitmap_type: BitmapType) -> usize {
@@ -132,6 +146,21 @@ async fn get_bitmaps(bitmap_type: BitmapType) -> Vec<u8> {
         bitmaps.append(&mut bm)
     }
     bitmaps
+}
+
+fn cal_bit_args(block_id: usize) -> (usize, usize, usize) {
+    let (bit_block_start_id, block_start_id) = (DATA_BITMAP_START_BLOCK, DATA_START_BLOCK);
+    //对应位图（包括所有的块）中的总共第K个bit（从左到右）
+    let bit_id = block_id - block_start_id;
+    //对应位图（包括所有的块）中的总共第K个byte（从左到右）
+    let total_byte_pos = bit_id / 8;
+    //单个byte中的第K个bit（从左到右）
+    let bit_pos = bit_id % 8;
+    //这个bit所在的块的块号（从超级块sp=0开始）
+    let bitmap_block_id = total_byte_pos / BLOCK_SIZE + bit_block_start_id;
+    //在单个块中的第K个byte（从左到右）
+    let inner_byte_pos = total_byte_pos % BLOCK_SIZE;
+    (bitmap_block_id, inner_byte_pos, bit_pos)
 }
 
 pub async fn get_inode_bitmaps() -> Vec<u8> {

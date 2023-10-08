@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    bitmap::{self, alloc_bit, dealloc_data_bit, dealloc_inode_bit, BitmapType},
-    block::{deserialize, get_block_buffer, write_block, BlockIDType},
+    bitmap::{self, alloc_bit, dealloc_data_bit, dealloc_data_bits, dealloc_inode_bit, BitmapType},
+    block::{deserialize, get_block_buffer, get_blocks_buffers, write_block, BlockIDType},
     dirent::DirEntry,
     fs_constants::*,
     simple_fs::{show_unit, SFS},
@@ -180,14 +180,12 @@ impl Inode {
             if first_id == 0 {
                 break; // 完成了，跳出
             }
-            first_ids.push(first_id);
+            first_ids.push(first_id as usize);
         }
-        for first_id in &first_ids {
-            //3.1 dealloc 二级块中的每个一级块所指向的直接块
-            dealloc_first_blocks(*first_id as usize).await;
-            //3.2 dealloc 二级块中的每个一级块自身
-            dealloc_data_bit(*first_id as usize).await;
-        }
+        //3.1 dealloc 二级块中的每个一级块所指向的直接块
+        dealloc_first_arr_blocks(&first_ids).await;
+        //3.2 dealloc 二级块中的每个一级块自身
+        dealloc_data_bits(&first_ids).await;
         //3.3 dealloc 二级块自身
         dealloc_data_bit(second_id).await;
     }
@@ -292,7 +290,6 @@ impl Inode {
                 rest_nums -= FISRT_MAX;
             }
         }
-
         Ok(())
     }
 
@@ -394,16 +391,29 @@ pub async fn check_inodes_and_fix() -> Result<(), Error> {
 
 /// dealloc 一级块以及其拥有的直接块
 async fn dealloc_first_blocks(first_id: usize) {
-    for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
-        let start = i * BLOCK_ADDR_SIZE;
-        let end = start + BLOCK_ADDR_SIZE;
-        let direct_block = get_block_buffer(first_id, start, end).await.unwrap();
+    dealloc_first_arr_blocks(&[first_id]).await;
+}
+
+async fn dealloc_first_arr_blocks(first_ids: &[usize]) {
+    let mut first_args = Vec::new();
+    for first_id in first_ids {
+        for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+            let start = i * BLOCK_ADDR_SIZE;
+            let end = start + BLOCK_ADDR_SIZE;
+            first_args.push((*first_id, start, end));
+        }
+    }
+    let direct_blocks = get_blocks_buffers(&first_args).await.unwrap();
+    let mut direct_ids = Vec::new();
+    for direct_block in direct_blocks {
+        // TODO block is empty 代替
         let id: u32 = bincode::deserialize(&direct_block).unwrap();
         if id == 0 {
-            break; // 已经完成了 跳出
+            continue;
         }
-        dealloc_data_bit(id as usize).await;
+        direct_ids.push(id as usize);
     }
+    bitmap::dealloc_data_bits(&direct_ids).await;
 }
 
 fn cal_offset(inode_id: usize) -> (usize, usize) {

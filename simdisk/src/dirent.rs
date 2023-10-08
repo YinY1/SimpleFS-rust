@@ -14,7 +14,7 @@ use tokio::{
 
 use crate::{
     block::{
-        self, deserialize, get_all_valid_blocks, get_block_buffer, insert_object, remove_object,
+        self, deserialize, get_all_valid_blocks, get_blocks_buffers, insert_object, remove_object,
     },
     fs_constants::*,
     inode::{Inode, InodeType},
@@ -110,10 +110,17 @@ impl DirEntry {
             if *block_id == 0 {
                 break;
             }
+            // 取出对应block的所有dirent buffer
+            let mut block_args = Vec::new();
             for i in 0..BLOCK_SIZE / DIRENTRY_SIZE {
                 let start = i * DIRENTRY_SIZE;
                 let end = start + DIRENTRY_SIZE;
-                let buffer = get_block_buffer(*block_id as usize, start, end).await?;
+                block_args.push((*block_id as usize, start, end));
+            }
+            let buffers = get_blocks_buffers(&block_args).await?;
+
+            // 将buffer反序列化成dirent
+            for buffer in buffers {
                 // 名字第一个字节为空 说明不是dirent
                 if buffer[0] == 0 {
                     continue;

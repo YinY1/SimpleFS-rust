@@ -59,8 +59,8 @@ impl SampleFileSystem {
     pub async fn info(&self) -> String {
         let (alloced_inodes, valid_inodes) = count_inodes().await;
         let (alloced, valid) = count_data_blocks().await;
-        let (alloced_size, used_unit) = show_unit(alloced);
-        let (valid_size, valid_unit) = show_unit(valid);
+        let (alloced_size, used_unit) = show_unit(alloced * BLOCK_SIZE);
+        let (valid_size, valid_unit) = show_unit(valid * BLOCK_SIZE);
         let infos = vec![
             format!("-----------------------\n"),
             format!("{:#?}\n", self.super_block),
@@ -156,10 +156,10 @@ lazy_static! {
         Arc::new(RwLock::new(SampleFileSystem::default()));
 }
 
-pub fn show_unit(size: usize) -> (usize, String) {
+pub fn show_unit(size: usize) -> (f32, String) {
     match size {
-        0..=1023 => (size, "B".to_string()),
-        1023..=1048575 => (size / 1024, "KiB".to_string()),
-        _ => (size / (1024 * 1024), "MiB".to_string()),
+        0..=1023 => (size as f32, "B".to_string()),
+        1024..=1048575 => (size as f32 / 1024.0, "KiB".to_string()),
+        _ => (size as f32 / (1024.0 * 1024.0), "MiB".to_string()),
     }
 }

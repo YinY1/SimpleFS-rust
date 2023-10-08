@@ -103,6 +103,7 @@ async fn main() -> io::Result<()> {
                 // args[0]为cwd
                 let args: Vec<&str> = command.split_whitespace().collect();
 
+                let start = tokio::time::Instant::now();
                 // 2.2 传输命令执行后的信息
                 match do_command(args, &mut socket).await {
                     Ok(result) => {
@@ -121,7 +122,8 @@ async fn main() -> io::Result<()> {
                     }
                 };
                 // 4 宣告结束
-                info!("cmd finished");
+                let duration = start.elapsed();
+                info!("cmd finished in {:?}", duration);
                 socket.write_all(COMMAND_FINISHED.as_bytes()).await.unwrap();
             }
         });

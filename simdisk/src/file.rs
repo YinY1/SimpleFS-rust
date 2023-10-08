@@ -4,7 +4,7 @@ use shell::receive_content;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 use crate::{
-    block::{get_all_blocks, insert_object, remove_object, write_file_content_to_block},
+    block::{get_all_blocks, insert_object, remove_object, write_file_content_to_blocks},
     dirent::{self, DirEntry},
     fs_constants::*,
     inode::{FileMode, Inode, InodeType},
@@ -66,9 +66,9 @@ pub async fn create_file(
     // 将文件写入block中
     let blocks = get_all_blocks(&inode).await?;
     assert!(blocks.len() >= input_vecs.len());
-    for (i, content) in input_vecs.into_iter().enumerate() {
-        write_file_content_to_block(content, blocks[i].1 as usize).await?;
-    }
+    let block_ids: Vec<_> = blocks.iter().map(|(_, id, _)| *id as usize).collect();
+    write_file_content_to_blocks(&input_vecs, &block_ids).await?;
+
     // 将目录项写入目录中
     // 为当前父节点持有的block添加一个目录项
     insert_object(&dirent, parent_inode).await?;
@@ -92,7 +92,7 @@ pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Resu
             }
             // 删除目录项
             remove_object(&dirent, block_id as usize, level, parent_inode).await?;
-            // 释放inode
+            // 释放inode // TODO 还能优化
             inode.dealloc().await;
             Ok(())
         }

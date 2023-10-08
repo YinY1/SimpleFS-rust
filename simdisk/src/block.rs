@@ -6,6 +6,7 @@ use std::{
     mem::size_of,
     os::unix::prelude::FileExt,
     sync::Arc,
+    usize,
 };
 use tokio::{
     io::{AsyncSeekExt, AsyncWriteExt},
@@ -85,32 +86,41 @@ impl BlockCacheManager {
 
 /// 将块读入缓存中
 pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
+    read_blocks_to_cache(&[block_id]).await
+}
+
+/// 批量将块读入缓存中
+pub async fn read_blocks_to_cache(block_id_addrs: &[usize]) -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut w = blk.write().await;
+    let mut file = None;
 
-    if w.block_cache.contains_key(&block_id) {
-        return Ok(());
-    }
+    for block_id in block_id_addrs {
+        if w.block_cache.contains_key(block_id) {
+            continue;
+        }
 
-    let mut block = Block {
-        block_id,
-        bytes: [0; BLOCK_SIZE],
-        modified: false,
-    };
+        if file.is_none() {
+            file = Some(File::open(FS_FILE_NAME)?);
+        }
 
-    let offset = block_id * BLOCK_SIZE;
-    match File::open(FS_FILE_NAME) {
-        Ok(file) => {
+        let mut block = Block {
+            block_id: *block_id,
+            bytes: [0; BLOCK_SIZE],
+            modified: false,
+        };
+
+        let offset = block_id * BLOCK_SIZE;
+        if let Some(file) = &mut file {
             if file.read_exact_at(&mut block.bytes, offset as u64).is_err() {
                 let e = format!("cannot read buffer at {}", offset);
                 error!("{}", e);
                 return Err(Error::new(ErrorKind::AddrNotAvailable, e));
             }
+            w.block_cache.insert(*block_id, block);
+            trace!("block {} push to cache", block_id);
         }
-        Err(error) => return Err(error),
     }
-    w.block_cache.insert(block_id, block);
-    trace!("block {} push to cache", block_id);
     Ok(())
 }
 
@@ -120,26 +130,44 @@ pub async fn get_block_buffer(
     start_byte: usize,
     end_byte: usize,
 ) -> Result<Vec<u8>, Error> {
-    // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id).await?;
-    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-    let bcm = blk.read().await;
-    let block = bcm.block_cache.get(&block_id).unwrap();
-    Ok(block.bytes[start_byte..end_byte].to_vec())
+    let buffers = get_blocks_buffers(&[(block_id, start_byte, end_byte)]).await?;
+    Ok(buffers[0].clone())
 }
 
-pub async fn write_file_content_to_block(content: String, block_id: usize) -> Result<(), Error> {
-    assert!(BLOCK_SIZE >= content.len());
-    trace!("write block{}", block_id);
+/// 批量获取指定块中的某一段缓存
+pub async fn get_blocks_buffers(
+    blocks_args: &[(usize, usize, usize)],
+) -> Result<Vec<Vec<u8>>, Error> {
+    let ids: Vec<_> = blocks_args.iter().map(|(id, _, _)| *id).collect();
+    read_blocks_to_cache(&ids).await?;
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let bcm = blk.read().await;
+    let mut buffers = Vec::new();
+    for (block_id, start, end) in blocks_args {
+        let block = bcm.block_cache.get(block_id).unwrap();
+        buffers.push(block.bytes[*start..*end].to_vec());
+    }
+    Ok(buffers)
+}
+
+pub async fn write_file_content_to_blocks(
+    contents: &[String],
+    block_ids: &[usize],
+) -> Result<(), Error> {
+    trace!("write block{:?}", block_ids);
     // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id).await?;
+    read_blocks_to_cache(block_ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-    let block = bcm.block_cache.get_mut(&block_id).unwrap();
-    block.modify_bytes(|bytes_arr| {
-        let end = content.len();
-        bytes_arr[..end].clone_from_slice(content.as_bytes());
-    });
+    for (i, block_id) in block_ids.iter().enumerate() {
+        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        let content = contents[i].clone();
+        assert!(BLOCK_SIZE >= content.len());
+        block.modify_bytes(|bytes_arr| {
+            let end = content.len();
+            bytes_arr[..end].clone_from_slice(content.as_bytes());
+        });
+    }
     Ok(())
 }
 
@@ -150,29 +178,41 @@ pub async fn write_block<T: serde::Serialize>(
     block_id: usize,
     start_byte: usize,
 ) -> Result<(), Error> {
-    trace!("write block{}", block_id);
-    // 当块不在缓存中时 读入缓存
-    read_block_to_cache(block_id).await?;
+    write_blocks(&[(object, block_id, start_byte)]).await
+}
+
+pub async fn write_blocks<T: serde::Serialize>(
+    object_args: &[(&T, usize, usize)],
+) -> Result<(), Error> {
+    let ids: Vec<_> = object_args
+        .iter()
+        .map(|(_, block_id, _)| *block_id)
+        .collect();
+    read_blocks_to_cache(&ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-    let block = bcm.block_cache.get_mut(&block_id).unwrap();
-    // 将 object 序列化
-    match bincode::serialize(object) {
-        Ok(obj_bytes) => {
-            let end_byte = obj_bytes.len() + start_byte;
-            assert!(end_byte <= BLOCK_SIZE);
-            trace!("write block{}, len {}B", block_id, obj_bytes.len());
-            block.modify_bytes(|bytes_arr| {
-                bytes_arr[start_byte..end_byte].clone_from_slice(&obj_bytes);
-            });
-            Ok(())
-        }
-        Err(err) => {
-            let e = format!("cannot serialize:{}", err);
-            error!("{e}");
-            Err(Error::new(ErrorKind::Other, e))
+
+    for (object, block_id, start_byte) in object_args {
+        trace!("write block{}", *block_id);
+        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        // 将 object 序列化
+        match bincode::serialize(*object) {
+            Ok(obj_bytes) => {
+                let end_byte = obj_bytes.len() + start_byte;
+                assert!(end_byte <= BLOCK_SIZE);
+                trace!("write block{}, len {}B", block_id, obj_bytes.len());
+                block.modify_bytes(|bytes_arr| {
+                    bytes_arr[*start_byte..end_byte].clone_from_slice(&obj_bytes);
+                });
+            }
+            Err(err) => {
+                let e = format!("cannot serialize:{}", err);
+                error!("{e}");
+                return Err(Error::new(ErrorKind::Other, e));
+            }
         }
     }
+    Ok(())
 }
 
 /// 尝试插入一个object到磁盘中
@@ -234,14 +274,17 @@ pub async fn insert_object<T: Serialize + Default + DeserializeOwned + PartialEq
     }
 }
 
-/// 清空这块block的内容
-pub async fn clear_block(block_id: usize) -> Result<(), Error> {
-    read_block_to_cache(block_id).await?;
+/// 批量清空block的内容
+pub async fn clear_blocks(block_ids: &[usize]) -> Result<(), Error> {
+    read_blocks_to_cache(block_ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
-    let block = bcm.block_cache.get_mut(&block_id).unwrap();
-    block.bytes = [0; BLOCK_SIZE];
-    block.modified = true;
+
+    for block_id in block_ids {
+        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        block.bytes = [0; BLOCK_SIZE];
+        block.modified = true;
+    }
     Ok(())
 }
 
@@ -287,26 +330,47 @@ async fn try_insert_to_block<T: Serialize + Default + DeserializeOwned + Partial
     Err(Error::new(ErrorKind::OutOfMemory, "no enough blocks"))
 }
 
-/// 获取一个直接块
-async fn get_direct_block(id: BlockIDType) -> Result<Vec<u8>, Error> {
-    get_block_buffer(id as usize, 0, BLOCK_SIZE).await
+/// 获取直接块
+async fn get_direct_blocks(id: &[BlockIDType]) -> Result<Vec<Vec<u8>>, Error> {
+    let args: Vec<_> = id.iter().map(|id| (*id as usize, 0, BLOCK_SIZE)).collect();
+    get_blocks_buffers(&args).await
 }
 
 /// 获取一个一级块所包含的所有直接块
 async fn get_blocks_of_first(
     first_id: BlockIDType,
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
-    let mut v = Vec::new();
-    for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
-        let start = i * BLOCK_ADDR_SIZE;
-        let end = start + BLOCK_ADDR_SIZE;
-        let addr_buff = get_block_buffer(first_id as usize, start, end).await?;
+    get_block_of_first_arr(&[first_id]).await
+}
+
+async fn get_block_of_first_arr(
+    first_ids: &[BlockIDType],
+) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
+    // 计算偏移量，存入数组
+    let mut first_args = Vec::new();
+    for first_id in first_ids {
+        for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
+            let start = i * BLOCK_ADDR_SIZE;
+            let end = start + BLOCK_ADDR_SIZE;
+            first_args.push((*first_id as usize, start, end));
+        }
+    }
+    // 取出一级块内所有地址的buffer
+    let buffers = get_blocks_buffers(&first_args).await?;
+    // 反序列化得到直接块id数组，和偏移量
+    let mut direct_args = Vec::new();
+    for addr_buff in buffers {
         let direct_id: BlockIDType = deserialize(&addr_buff)?;
         if direct_id == 0 {
-            break; // 为空
+            continue; // 为空
         }
-        let buffer = get_direct_block(direct_id).await?;
-        v.push((BlockLevel::FirstIndirect, direct_id, buffer));
+        direct_args.push((direct_id as usize, 0_usize, BLOCK_SIZE));
+    }
+    // 取出所有直接块，并做好标记
+    let mut v = Vec::new();
+    let direct_buffers = get_blocks_buffers(&direct_args).await?;
+    for (i, buffer) in direct_buffers.into_iter().enumerate() {
+        v.push((BlockLevel::FirstIndirect, direct_args[i].0 as u32, buffer));
     }
     Ok(v)
 }
@@ -315,21 +379,30 @@ async fn get_blocks_of_first(
 async fn get_blocks_of_second(
     second_id: BlockIDType,
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
-    let mut v = Vec::new();
+    // 计算偏移量，存入数组
+    let mut second_args = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let addr_buff = get_block_buffer(second_id as usize, start, end).await?;
+        second_args.push((second_id as usize, start, end));
+    }
+    let first_addr_buffers = get_blocks_buffers(&second_args).await?;
+    // 反序列化得到一级块id数组，和偏移量
+    let mut first_ids = Vec::new();
+    for addr_buff in first_addr_buffers {
         let first_id: BlockIDType = deserialize(&addr_buff)?;
         if first_id == 0 {
-            break; // 为空，停止
+            break; // 为空
         }
-        let mut buffers = get_blocks_of_first(first_id).await?;
-        for (level, _, _) in &mut buffers {
-            *level = BlockLevel::SecondIndirect;
-        }
-        v.append(&mut buffers);
+        first_ids.push(first_id);
     }
+    // 从一级块中取出直接块
+    let mut buffers = get_block_of_first_arr(&first_ids).await?;
+    let mut v = Vec::new();
+    for (level, _, _) in &mut buffers {
+        *level = BlockLevel::SecondIndirect;
+    }
+    v.append(&mut buffers);
     Ok(v)
 }
 
@@ -339,13 +412,21 @@ pub async fn get_all_blocks(
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = Vec::new();
     // 直接块
+    let mut l = DIRECT_BLOCK_NUM;
     for i in 0..DIRECT_BLOCK_NUM {
-        let id = inode.addr[i];
-        if id == 0 {
-            return Ok(v);
+        if inode.addr[i] == 0 {
+            l = i;
+            break;
         }
-        let buffer = get_direct_block(id).await?;
-        v.push((BlockLevel::Direct, id, buffer));
+    }
+    let directs = get_direct_blocks(&inode.addr[..l]).await?;
+    let mut direct_args = Vec::new();
+    for (i, buffer) in directs.into_iter().enumerate() {
+        direct_args.push((BlockLevel::Direct, inode.addr[i], buffer));
+    }
+    v.append(&mut direct_args);
+    if l < DIRECT_BLOCK_NUM {
+        return Ok(v);
     }
 
     // 一级
@@ -371,7 +452,7 @@ pub async fn get_all_valid_blocks(
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
     let mut v = get_all_blocks(inode).await?;
     // 保留非空block
-    v.retain(|(_, _, block)| !is_empty(block));
+    v.retain(|(_, _, block)| !block_is_empty(block));
     Ok(v)
 }
 
@@ -385,25 +466,35 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
     //1.序列化这个block，一一比较
     let size = size_of::<T>();
     let mut exist = false;
+
+    let mut block_args = Vec::new();
     for i in 0..BLOCK_SIZE / size {
         let start = i * size;
         let end = start + size;
-        let buffer = get_block_buffer(block_id, start, end).await?;
-        if *object == deserialize(&buffer)? {
+        block_args.push((block_id, start, end));
+    }
+    let buffers = get_blocks_buffers(&block_args).await?;
+
+    for (i, buffer) in buffers.iter().enumerate() {
+        if *object == deserialize(buffer)? {
             exist = true;
             // 覆盖该位置
+            let start = i * size;
             write_block(&T::default(), block_id, start).await?;
             break;
         }
     }
+
     if !exist {
         return Err(Error::new(ErrorKind::NotFound, ""));
     }
+
     //2. 再次序列化，判断是否已空, 如果全空 dealloc
     let block = get_block_buffer(block_id, 0, BLOCK_SIZE).await?;
-    if !is_empty(&block) {
+    if !block_is_empty(&block) {
         return Ok(());
     }
+
     dealloc_data_bit(block_id).await;
     trace!("dealloc data bit ok");
 
@@ -428,27 +519,33 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
         BlockLevel::SecondIndirect => {
             //3.3. 如果是在二级块，判断二级块是否已空
             let second_id = inode.get_second_id();
-            let mut first_block: Vec<u8>;
             let mut first_id = 0;
             let mut start = 0; // 记录二级块中的一级块条目偏移量
 
             // 首先对二级块的每个一级地址所记录的直接块去清除记录
+            let mut second_args = Vec::new();
             for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
-                start = i * BLOCK_ADDR_SIZE;
+                let start = i * BLOCK_ADDR_SIZE;
                 let end = start + BLOCK_ADDR_SIZE;
-                first_block = get_block_buffer(second_id, start, end).await?;
-                first_id = deserialize(&first_block)?;
+                second_args.push((second_id, start, end));
+            }
+            let first_addrs = get_blocks_buffers(&second_args).await?;
+
+            for (i, first_addr) in first_addrs.iter().enumerate() {
+                first_id = deserialize(first_addr)?;
                 if remove_block_addr_in_first_block(first_id, block_id)
                     .await
                     .is_ok()
                 {
                     // 找到并清除了，跳出循环
+                    start = i * BLOCK_ADDR_SIZE;
                     break;
                 }
             }
+
             // 然后检查找到的那个一级块是否空，空了就清掉那个一级块在二级块中的记录
-            first_block = get_block_buffer(first_id, 0, BLOCK_SIZE).await?;
-            if !is_empty(&first_block) {
+            let first_block = get_block_buffer(first_id, 0, BLOCK_SIZE).await?;
+            if !block_is_empty(&first_block) {
                 // 那个一级块还有条目，直接返回
                 return Ok(());
             }
@@ -457,7 +554,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
 
             // 最后检查二级块 如果二级块空了就把二级块也清空
             let second_block = get_block_buffer(second_id, 0, BLOCK_SIZE).await?;
-            if !is_empty(&second_block) {
+            if !block_is_empty(&second_block) {
                 return Ok(());
             }
             // 全空, 释放二级块
@@ -472,22 +569,29 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
 /// 清除一级块中的直接块地址条目，同时一级块变空时dealloc一级块
 async fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> Result<(), Error> {
     let mut exist = false;
+    let mut first_args = Vec::new();
     for i in 0..BLOCK_SIZE / BLOCK_ADDR_SIZE {
         let start = i * BLOCK_ADDR_SIZE;
         let end = start + BLOCK_ADDR_SIZE;
-        let direct_addr = get_block_buffer(first_id, start, end).await?;
+        first_args.push((first_id, start, end));
+    }
+    let direct_addrs = get_blocks_buffers(&first_args).await?;
+
+    for (i, direct_addr) in direct_addrs.iter().enumerate() {
         // 在一级块中找到了这个块的地址，清除
-        if direct_addr == serialize(&(block_id as u32))? {
+        if *direct_addr == serialize(&(block_id as u32))? {
             exist = true;
-            write_block(&0u32, first_id, start).await?;
+            let start = i * BLOCK_ADDR_SIZE;
+            write_block(&0_u32, first_id, start).await?;
             break;
         }
     }
+
     if !exist {
         return Err(Error::new(ErrorKind::NotFound, ""));
     }
     let first_block = get_block_buffer(first_id, 0, BLOCK_SIZE).await?;
-    if !is_empty(&first_block) {
+    if !block_is_empty(&first_block) {
         return Ok(());
     }
     dealloc_data_bit(first_id).await;
@@ -495,7 +599,7 @@ async fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> R
 }
 
 /// 判断block是否是全0
-pub fn is_empty(block: &[u8]) -> bool {
+pub fn block_is_empty(block: &[u8]) -> bool {
     for b in block {
         if *b != 0 {
             return false;

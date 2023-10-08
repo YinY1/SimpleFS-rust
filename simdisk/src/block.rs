@@ -511,7 +511,7 @@ pub async fn check_data_and_fix() -> Result<(), Error> {
         for j in 0..8 {
             let mask = 0b10000000 >> j;
             let bit_id = i * 8 + j;
-            if bit_id >= DATA_NUM {
+            if bit_id >= DATA_BLOCK_MAX_NUM {
                 return Ok(());
             }
             let block_id = bit_id + DATA_START_BLOCK;

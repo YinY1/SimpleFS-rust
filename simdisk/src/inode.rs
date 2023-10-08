@@ -13,7 +13,7 @@ use crate::{
     block::{deserialize, get_block_buffer, write_block, BlockIDType},
     dirent::DirEntry,
     fs_constants::*,
-    simple_fs::SFS,
+    simple_fs::{show_unit, SFS},
     user,
 };
 
@@ -217,7 +217,7 @@ impl Inode {
         let block_nums = if self.size == 0 {
             1
         } else {
-            (self.size as f64 / BLOCK_SIZE as f64).ceil() as usize
+            (self.size as usize - 1) / BLOCK_SIZE + 1 // 向上取整
         };
         if block_nums > bitmap::count_valid_data_blocks().await {
             // 没有足够的剩余空间
@@ -359,7 +359,8 @@ impl Inode {
                 );
                 if !dir.is_dir {
                     // 是文件 加上文件大小
-                    infos.push_str(&format!("\t{}KiB", inode.size));
+                    let (size, unit) = show_unit(inode.size as usize);
+                    infos.push_str(&format!("\t{}{}", size, unit));
                 }
                 name.push_str(&infos);
             }

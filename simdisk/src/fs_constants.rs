@@ -15,10 +15,12 @@ pub const INODE_BITMAP_NUM: usize = 1; // inode bitmap块数
 
 pub const DATA_BITMAP_NUM: usize = 13; // data bitmap块数
 
-pub const INODE_BLOCK_NUM: usize = 1024 / BLOCK_SIZE * INODE_SIZE; // inode 区块数
+pub const INODE_MAX_NUM: usize = INODE_BITMAP_NUM * BLOCK_SIZE * 8; // inode 总数
+
+pub const INODE_BLOCK_NUM: usize = INODE_MAX_NUM * INODE_SIZE / BLOCK_SIZE; // inode 区块数
 
 // data 区块数 (<= bitmap bit数,因为系统限制，bitmap有冗余)
-pub const DATA_NUM: usize =
+pub const DATA_BLOCK_MAX_NUM: usize =
     FS_SIZE / BLOCK_SIZE - INODE_BLOCK_NUM - DATA_BITMAP_NUM - INODE_BITMAP_NUM - 1;
 
 //* 块号分配 */

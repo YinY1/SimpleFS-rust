@@ -59,14 +59,16 @@ impl SampleFileSystem {
     pub async fn info(&self) -> String {
         let (alloced_inodes, valid_inodes) = count_inodes().await;
         let (alloced, valid) = count_data_blocks().await;
+        let (alloced_size, used_unit) = show_unit(alloced);
+        let (valid_size, valid_unit) = show_unit(valid);
         let infos = vec![
             format!("-----------------------\n"),
             format!("{:#?}\n", self.super_block),
             format!("{:#?}\n", self.current_inode),
             format!("[Inode  used] {}\n", alloced_inodes),
             format!("[Inode valid] {}\n", valid_inodes),
-            format!("[Disk   used] {} KB\n", alloced),
-            format!("[Disk  valid] {} KB\n", valid),
+            format!("[Disk   used] {}{}\n", alloced_size, used_unit),
+            format!("[Disk  valid] {}{}\n", valid_size, valid_unit),
         ];
         infos.concat()
     }
@@ -152,4 +154,12 @@ pub fn create_fs_file() -> Result<(), Error> {
 lazy_static! {
     pub static ref SFS: Arc<RwLock<SampleFileSystem>> =
         Arc::new(RwLock::new(SampleFileSystem::default()));
+}
+
+pub fn show_unit(size: usize) -> (usize, String) {
+    match size {
+        0..=1023 => (size, "B".to_string()),
+        1023..=1048575 => (size / 1024, "KiB".to_string()),
+        _ => (size / (1024 * 1024), "MiB".to_string()),
+    }
 }

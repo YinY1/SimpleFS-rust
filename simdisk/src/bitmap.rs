@@ -39,9 +39,9 @@ pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
                     // 找到空闲bit
                     let id = ((n * BLOCK_SIZE + i) * 8 + j) as u32;
                     if let BitmapType::Data = bitmap_type {
-                        if id as usize >= DATA_NUM {
+                        if id as usize >= DATA_BLOCK_MAX_NUM {
                             // 块id虽然能在位图中表示，但是超出了数据区块的数目
-                            let err = format!("block id {} out of limit {}", id, DATA_NUM);
+                            let err = format!("block id {} out of limit {}", id, DATA_BLOCK_MAX_NUM);
                             return Err(Error::new(ErrorKind::OutOfMemory, err));
                         }
                     }
@@ -146,14 +146,14 @@ pub async fn get_data_bitmaps() -> Vec<u8> {
 /// 统计申请了多少inode,第一个返回值为已申请，第二个返回值为未申请
 pub async fn count_inodes() -> (usize, usize) {
     let alloced = count_bits(BitmapType::Inode).await;
-    (alloced, 1024 - alloced)
+    (alloced, INODE_MAX_NUM - alloced)
 }
 
 #[allow(unused)]
 /// 统计申请了多少数据块,第一个返回值为已申请，第二个返回值为未申请
 pub async fn count_data_blocks() -> (usize, usize) {
     let alloced = count_bits(BitmapType::Data).await;
-    (alloced, DATA_NUM - alloced)
+    (alloced, DATA_BLOCK_MAX_NUM - alloced)
 }
 
 #[allow(unused)]
@@ -165,7 +165,7 @@ pub async fn count_valid_inodes() -> usize {
 #[allow(unused)]
 /// 统计空闲data block数
 pub async fn count_valid_data_blocks() -> usize {
-    DATA_NUM - count_bits(BitmapType::Data).await
+    DATA_BLOCK_MAX_NUM - count_bits(BitmapType::Data).await
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -2,7 +2,7 @@ use std::io::{Error, Write};
 
 use shell::*;
 use tokio::io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ErrorKind, Stdin};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 
 extern crate pretty_env_logger;
 #[macro_use]
@@ -93,10 +93,12 @@ async fn main() -> io::Result<()> {
         let msg = String::from_utf8_lossy(&stream_buffer).replace('\0', "");
         match msg.trim() {
             // 2. ex1.1 需要输入文件内容
-            INPUT_FILE_CONTENT => {
+            input_msg if msg.starts_with(INPUT_FILE_CONTENT) => {
                 let inputs = read_file_content(&mut io_reader).await?;
-                // 2. ex1.2 将得到的文件内容通过8081发送给server
-                send_content(inputs).await?;
+                // 解析端口
+                let addr = input_msg.strip_prefix(INPUT_FILE_CONTENT).unwrap();
+                // 2. ex1.2 将得到的文件内容通过给定端口发送给server
+                send_content(inputs, addr).await?;
             }
             // 需要确认是否继续执行
             COMMAND_CONFIRM => {
@@ -110,9 +112,15 @@ async fn main() -> io::Result<()> {
                 }
                 stream.write_all(answer.as_bytes()).await?;
             }
-            // 2.3 需要打开文件通道接受内容
+            // 2.3.1 需要打开文件通道接受内容
             RECEIVE_CONTENTS => {
-                let contents = receive_content().await?;
+                // 建立临时socket，端口随机
+                let listener = TcpListener::bind("127.0.0.1:0").await?;
+                // 2.3.2 将端口写给server
+                let addr = listener.local_addr()?;
+                stream.write_all(addr.to_string().as_bytes()).await?;
+                // 2.3.3 接受内容
+                let contents = receive_content(&listener).await?;
                 if contents.starts_with(ERROR_MESSAGE_PREFIX) {
                     error!("{}", contents.strip_prefix(ERROR_MESSAGE_PREFIX).unwrap());
                 } else {

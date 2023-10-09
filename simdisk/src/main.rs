@@ -105,22 +105,39 @@ async fn main() -> io::Result<()> {
 
                 let start = tokio::time::Instant::now();
                 // 2.2 传输命令执行后的信息
-                match do_command(args, &mut socket).await {
-                    Ok(result) => {
-                        if let Some(output) = result {
-                            // 2.3 通知对方准备接受内容 将输出通过8081传输
-                            socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
-                            send_content(output).await.unwrap();
-                        }
-                    }
-                    // 2.3 命令执行出错的写回err,也通过8081
+                let msg = match do_command(args, &mut socket).await {
+                    Ok(result) => result,
                     Err(err) => {
                         error!("send err back to socket: {:?}, err= {}", addr, err);
-                        socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
+                        Some([ERROR_MESSAGE_PREFIX, &err.to_string()].concat())
+                        /* socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
                         let err_msg = [ERROR_MESSAGE_PREFIX, &err.to_string()].concat();
-                        send_content(err_msg).await.unwrap();
+                        send_content(err_msg).await.unwrap(); */
                     }
                 };
+                // 2.3 如果有信息要传输
+                if let Some(msg) = msg {
+                    // 2.3.1 通知对方准备接受内容，等待地址
+                    socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
+                    // 2.3.2 接受地址
+                    cmd_buffer = [0; SOCKET_BUFFER_SIZE];
+                    let n = match socket.read(&mut cmd_buffer).await {
+                        Ok(n) if n == 0 => return,
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!("failed to read from socket; err = {:?}", e);
+                            return;
+                        }
+                    };
+                    let addr = String::from_utf8_lossy(&cmd_buffer[..n]);
+                    info!("sending contents through {}", addr);
+                    // 2.3.3 发送内容
+                    if let Err(e) = send_content(msg, &addr).await {
+                        error!("{}", e);
+                        return;
+                    }
+                }
+
                 // 4 宣告结束
                 let duration = start.elapsed();
                 info!("cmd finished in {:?}", duration);
@@ -176,18 +193,20 @@ async fn do_command(
                 _ => Err(error_arg()),
             },
             2 => {
-                let name = get_absolute_path(cwd, &commands[1]);
+                let absolut_path = get_absolute_path(cwd, &commands[1]);
                 match commands[0].as_str() {
-                    "cd" => syscall::cd(&name).await.map(|_| None),
-                    "md" => syscall::mkdir(username, &name).await.map(|_| None),
+                    "cd" => syscall::cd(&absolut_path).await.map(|_| None),
+                    "md" => syscall::mkdir(username, &absolut_path).await.map(|_| None),
                     // 对于rd 要等待client确认是否删除
-                    "rd" => syscall::rmdir(username, &name, socket).await.map(|_| None),
-                    // 对于newfile 需要输入文件内容，要等待client传输内容
-                    "newfile" => syscall::new_file(username, &name, FileMode::RDWR, socket)
+                    "rd" => syscall::rmdir(username, &absolut_path, socket)
                         .await
                         .map(|_| None),
-                    "cat" => syscall::cat(&name).await,
-                    "del" => syscall::del(username, &name).await.map(|_| None),
+                    // 对于newfile 需要输入文件内容，要等待client传输内容
+                    "newfile" => syscall::new_file(username, &absolut_path, FileMode::RDWR, socket)
+                        .await
+                        .map(|_| None),
+                    "cat" => syscall::cat(&absolut_path).await,
+                    "del" => syscall::del(username, &absolut_path).await.map(|_| None),
                     _ => Err(error_arg()),
                 }
             }

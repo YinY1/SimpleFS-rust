@@ -147,7 +147,15 @@ pub async fn get_blocks_buffers(
     let bcm = blk.read().await;
     let mut buffers = Vec::new();
     for (block_id, start, end) in blocks_args {
-        let block = bcm.block_cache.get(block_id).unwrap();
+        let block = match bcm.block_cache.get(block_id) {
+            Some(block) => block,
+            None => {
+                // 可能会因为他人持有写锁，写完后清空了缓存导致读不到缓存，所以要重读
+                info!("re-read caches");
+                read_blocks_to_cache(&ids).await?;
+                bcm.block_cache.get(block_id).unwrap()
+            }
+        };
         buffers.push(block.bytes[*start..*end].to_vec());
     }
     Ok(buffers)

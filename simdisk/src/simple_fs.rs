@@ -21,7 +21,6 @@ use crate::{
 pub struct SimpleFileSystem {
     pub root_inode: Inode,       //文件系统的根节点
     pub super_block: SuperBlock, //超级块的信息
-    pub current_inode: Inode,    // 临时记录操作的当前节点
     pub user_infos: User,        // 文件系统的用户信息
 }
 
@@ -31,7 +30,6 @@ impl SimpleFileSystem {
         trace!("read SFS");
         let root_inode = Inode::read(0).await.unwrap();
         *self = Self {
-            current_inode: root_inode.clone(),
             root_inode,
             super_block: SuperBlock::read().await.unwrap(),
             user_infos: User::read().await.unwrap(),
@@ -54,7 +52,7 @@ impl SimpleFileSystem {
     }
 
     /// 打印文件系统的信息
-    pub async fn info(&self) -> String {
+    pub async fn info(&self, current_inode: Inode) -> String {
         let (alloced_inodes, valid_inodes) = count_inodes().await;
         let (alloced, valid) = count_data_blocks().await;
         let (alloced_size, used_unit) = show_unit(alloced * BLOCK_SIZE);
@@ -62,7 +60,7 @@ impl SimpleFileSystem {
         let infos = vec![
             format!("-----------------------\n"),
             format!("{:#?}\n", self.super_block),
-            format!("{:#?}\n", self.current_inode),
+            format!("{:#?}\n", current_inode),
             format!("[Inode  used] {}\n", alloced_inodes),
             format!("[Inode valid] {}\n", valid_inodes),
             format!("[Disk   used] {}{}\n", alloced_size, used_unit),
@@ -93,7 +91,6 @@ impl SimpleFileSystem {
         blk.write().await.sync_and_clear_cache().await.unwrap();
 
         *self = Self {
-            current_inode: root_inode.clone(),
             root_inode,
             super_block,
             user_infos: user_info,

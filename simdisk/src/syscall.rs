@@ -1,21 +1,21 @@
-use std::{future::Future, io::Error, pin::Pin, sync::Arc};
+use std::{future::Future, io, pin::Pin, sync::Arc};
 
 use tokio::net::TcpStream;
 
 use crate::{
     block::sync_all_block_cache,
     dirent, file,
-    inode::FileMode,
+    inode::{FileMode, Inode},
     simple_fs::{self, SFS},
 };
 
 /// 打印
-pub async fn info(cwd: &str) -> Result<Option<String>, Error> {
-    let res = temp_cd_and_do(&[cwd, "/"].concat(), false, |_| {
-        Box::pin(async {
+pub async fn info(cwd: &str) -> io::Result<Option<String>> {
+    let res = temp_cd_and_do(&[cwd, "/"].concat(), false, |_, current_inode| {
+        Box::pin(async move {
             let fs = Arc::clone(&SFS);
             let read_lock = fs.read().await;
-            Ok(Some(read_lock.info().await))
+            Ok(Some(read_lock.info(current_inode).await))
         })
     })
     .await?;
@@ -24,13 +24,9 @@ pub async fn info(cwd: &str) -> Result<Option<String>, Error> {
 }
 
 /// 展示目录信息
-pub async fn ls(username: &str, path: &str, detail: bool) -> Result<Option<String>, Error> {
-    let infos = temp_cd_and_do(&[path, "/"].concat(), false, |_| {
-        Box::pin(async {
-            let fs = Arc::clone(&SFS);
-            let read_lock = fs.read().await;
-            Ok(Some(read_lock.current_inode.ls(username, detail).await))
-        })
+pub async fn ls(username: &str, path: &str, detail: bool) -> io::Result<Option<String>> {
+    let infos = temp_cd_and_do(&[path, "/"].concat(), false, |_, current_inode| {
+        Box::pin(async move { Ok(Some(current_inode.ls(username, detail).await)) })
     })
     .await?;
     trace!("finished cmd: ls_dir");
@@ -38,13 +34,11 @@ pub async fn ls(username: &str, path: &str, detail: bool) -> Result<Option<Strin
 }
 
 /// 创建目录
-pub async fn mkdir(username: &str, dir_name: &str) -> Result<(), Error> {
-    temp_cd_and_do(dir_name, true, |n| {
+pub async fn mkdir(username: &str, dir_name_absolute: &str) -> io::Result<()> {
+    temp_cd_and_do(dir_name_absolute, true, |name, mut current_inode| {
         Box::pin(async move {
             let (gid, uid) = get_current_user_ids(username).await;
-            let fs = Arc::clone(&SFS);
-            let mut fs_write_lock = fs.write().await;
-            dirent::make_directory(n, &mut fs_write_lock.current_inode, gid, uid).await
+            dirent::make_directory(name, &mut current_inode, gid, uid).await
         })
     })
     .await?;
@@ -53,13 +47,15 @@ pub async fn mkdir(username: &str, dir_name: &str) -> Result<(), Error> {
 }
 
 /// 删除目录，包括其中的文件和子目录
-pub async fn rmdir(username: &str, dir_name: &str, socket: &mut TcpStream) -> Result<(), Error> {
-    temp_cd_and_do(dir_name, true, |n| {
+pub async fn rmdir(
+    username: &str,
+    dir_name_absolute: &str,
+    socket: &mut TcpStream,
+) -> io::Result<()> {
+    temp_cd_and_do(dir_name_absolute, true, |name, mut current_inode| {
         Box::pin(async move {
             let (gid, _) = get_current_user_ids(username).await;
-            let fs = Arc::clone(&SFS);
-            let mut w = fs.write().await;
-            dirent::remove_directory(n, &mut w.current_inode, socket, gid).await
+            dirent::remove_directory(name, &mut current_inode, socket, gid).await
         })
     })
     .await?;
@@ -68,13 +64,10 @@ pub async fn rmdir(username: &str, dir_name: &str, socket: &mut TcpStream) -> Re
 }
 
 /// 移动路径
-pub async fn cd(path: &str) -> Result<(), Error> {
+pub async fn cd(absolute_path: &str) -> io::Result<()> {
     // 目录不存在会抛出err
-    dirent::cd(path).await?;
-    // 还原状态
-    let fs = Arc::clone(&SFS);
-    let mut fs_write_lock = fs.write().await;
-    fs_write_lock.current_inode = fs_write_lock.root_inode.clone();
+    let root = Arc::clone(&SFS).read().await.root_inode.clone();
+    dirent::cd(absolute_path, &root).await?;
     trace!("finished cmd: cd");
     Ok(())
 }
@@ -82,19 +75,17 @@ pub async fn cd(path: &str) -> Result<(), Error> {
 /// 创建新文件
 pub async fn new_file(
     username: &str,
-    filename: &str,
+    filename_absolute: &str,
     mode: FileMode,
     socket: &mut TcpStream,
-) -> Result<(), Error> {
-    temp_cd_and_do(filename, true, |n| {
+) -> io::Result<()> {
+    temp_cd_and_do(filename_absolute, true, |filename, mut current_inode| {
         Box::pin(async move {
             let user_id = get_current_user_ids(username).await;
-            let fs = Arc::clone(&SFS);
-            let mut fs_write_lock = fs.write().await;
             file::create_file(
-                n,
+                filename,
                 mode,
-                &mut fs_write_lock.current_inode,
+                &mut current_inode,
                 false,
                 "",
                 socket,
@@ -109,31 +100,25 @@ pub async fn new_file(
 }
 
 /// 删除文件
-pub async fn del(username: &str, filename: &str) -> Result<(), Error> {
-    temp_cd_and_do(filename, true, |n| {
+pub async fn del(username: &str, filename_absolute: &str) -> io::Result<()> {
+    temp_cd_and_do(filename_absolute, true, |filename, mut current_inode| {
         Box::pin(async move {
             let (gid, _) = get_current_user_ids(username).await;
-            let fs = Arc::clone(&SFS);
-            let mut w = fs.write().await;
-            file::remove_file(n, &mut w.current_inode, gid).await
+            file::remove_file(filename, &mut current_inode, gid).await
         })
     })
     .await?;
-    trace!("finished cmd: del [{}]", filename);
+    trace!("finished cmd: del [{}]", filename_absolute);
     Ok(())
 }
 
 /// 获取文件内容
-pub async fn cat(name: &str) -> Result<Option<String>, Error> {
-    let content = temp_cd_and_do(name, false, |n| {
-        Box::pin(async move {
-            let fs = Arc::clone(&SFS);
-            let read_lock = fs.read().await;
-            file::get_file_content(n, &read_lock.current_inode).await
-        })
+pub async fn cat(filename_absolute: &str) -> io::Result<Option<String>> {
+    let content = temp_cd_and_do(filename_absolute, false, |filename, current_inode| {
+        Box::pin(async move { file::get_file_content(filename, &current_inode).await })
     })
     .await?;
-    trace!("finished cmd: cat [{}]", name);
+    trace!("finished cmd: cat [{}]", filename_absolute);
     Ok(Some(content))
 }
 
@@ -143,32 +128,26 @@ pub async fn copy(
     source_path: &str,
     target_path: &str,
     socket: &mut TcpStream,
-) -> Result<(), Error> {
+) -> io::Result<()> {
     let content = if source_path.starts_with("<host>") {
         // 访问host目录
         let path = source_path.strip_prefix("<host>").unwrap();
         std::fs::read_to_string(path)?
     } else {
         // 从系统中取出内容
-        temp_cd_and_do(source_path, false, |name| {
-            Box::pin(async {
-                let fs = Arc::clone(&SFS);
-                let read_lock = fs.read().await;
-                file::get_file_content(name, &read_lock.current_inode).await
-            })
+        temp_cd_and_do(source_path, false, |name, current_inode| {
+            Box::pin(async move { file::get_file_content(name, &current_inode).await })
         })
         .await?
     };
     trace!("finished get source contents");
-    temp_cd_and_do(target_path, true, |name| {
+    temp_cd_and_do(target_path, true, |name, mut current_inode| {
         Box::pin(async move {
             let user_id = get_current_user_ids(username).await;
-            let fs = Arc::clone(&SFS);
-            let mut w = fs.write().await;
             file::create_file(
                 name,
                 FileMode::RDWR,
-                &mut w.current_inode,
+                &mut current_inode,
                 true,
                 &content,
                 socket,
@@ -183,7 +162,7 @@ pub async fn copy(
 }
 
 /// 查看超级块是否损坏，并查看位图是否出错
-pub async fn check() -> Result<(), Error> {
+pub async fn check() -> io::Result<()> {
     let fs = Arc::clone(&SFS);
     fs.write().await.reset_sp().await;
     simple_fs::check_bitmaps_and_fix().await?;
@@ -192,7 +171,7 @@ pub async fn check() -> Result<(), Error> {
 }
 
 /// 获取所有用户信息
-pub async fn get_users_info(username: &str) -> Result<Option<String>, Error> {
+pub async fn get_users_info(username: &str) -> io::Result<Option<String>> {
     let fs = Arc::clone(&SFS);
     let read_lock = fs.read().await;
     let current_gid = read_lock.get_user_gid(username)?;
@@ -202,7 +181,7 @@ pub async fn get_users_info(username: &str) -> Result<Option<String>, Error> {
 }
 
 /// 格式化
-pub async fn formatting() -> Result<(), Error> {
+pub async fn formatting() -> io::Result<()> {
     let fs = Arc::clone(&SFS);
     fs.write().await.force_clear().await;
     trace!("finished cmd: formatting");
@@ -217,19 +196,22 @@ pub async fn formatting() -> Result<(), Error> {
 /// f 返回 Error(msg)代表f执行失败，返回ok代表成功
 ///
 /// 最后该函数返回从f得到的失败信息err结果，f成功则返回ok
-async fn temp_cd_and_do<'a, F, T>(mut name: &'a str, need_sync: bool, f: F) -> Result<T, Error>
+async fn temp_cd_and_do<'a, F, T>(
+    mut absolute_path: &'a str,
+    need_sync: bool,
+    f: F,
+) -> io::Result<T>
 where
-    F: FnOnce(&'a str) -> Pin<Box<dyn Future<Output = Result<T, Error>> + 'a + Send>>,
+    F: FnOnce(&'a str, Inode) -> Pin<Box<dyn Future<Output = io::Result<T>> + 'a + Send>>,
 {
-    let mut flag = false;
-    if let Some((path, filename)) = name.rsplit_once('/') {
+    let mut current_inode = Arc::clone(&SFS).read().await.root_inode.clone();
+    if let Some((path, filename)) = absolute_path.rsplit_once('/') {
         // 尝试进入目录
-        dirent::cd(path).await?;
-        flag = true;
-        name = filename;
+        current_inode = dirent::cd(path, &current_inode).await?;
+        absolute_path = filename;
     }
     // 执行f的操作，失败则f的错误信息
-    let res = match f(name).await {
+    match f(absolute_path, current_inode).await {
         Ok(ok) => {
             if need_sync {
                 sync_all_block_cache().await?;
@@ -237,14 +219,7 @@ where
             Ok(ok)
         }
         Err(err) => Err(err),
-    };
-    if flag {
-        // 还原目录状态
-        let fs = Arc::clone(&SFS);
-        let mut w = fs.write().await;
-        w.current_inode = w.root_inode.clone();
     }
-    res
 }
 
 /// 获取当前用户的id

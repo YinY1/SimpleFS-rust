@@ -7,7 +7,6 @@ use tokio::{
 };
 
 pub const SOCKET_ADDR: &str = "127.0.0.1:8080";
-pub const CONTENT_SOCKET_ADDR: &str = "127.0.0.1:8081";
 pub const BASH_REQUEST: &str = "BASH OK";
 pub const EMPTY_INPUT: &str = "EMPTY INPUT";
 pub const EXIT_MSG: &str = "EXIT";
@@ -18,17 +17,17 @@ pub const LOGIN_SUCCESS: &str = "LOGIN_SUCCESS";
 pub const REGIST_SUCCESS: &str = "REGIST SUCCESS";
 pub const RECEIVE_CONTENTS: &str = "RECEIVE CONTENTS";
 pub const READY_RECEIVE_CONTENTS: &str = "READY!";
-pub const HELP_REQUEST:&str = "HELP";
-pub const ERROR_MESSAGE_PREFIX:&str = "ErrMsg:";
+pub const HELP_REQUEST: &str = "HELP";
+pub const ERROR_MESSAGE_PREFIX: &str = "ErrMsg:";
 pub const SOCKET_BUFFER_SIZE: usize = 128;
 
-/// 通过8081发送长内容，送达后关闭socket
-pub async fn send_content(content: String) -> io::Result<()> {
+/// 通过addr发送长内容，送达后关闭socket
+pub async fn send_content(content: String, addr: &str) -> io::Result<()> {
     let mut stream;
     let mut retry = 0;
     loop {
         // 轮询等待tcp打开
-        match TcpStream::connect(CONTENT_SOCKET_ADDR).await {
+        match TcpStream::connect(addr).await {
             Ok(s) => {
                 stream = s;
                 break;
@@ -46,16 +45,12 @@ pub async fn send_content(content: String) -> io::Result<()> {
     stream.shutdown().await
 }
 
-/// 开始临时监听8081，接受长内容，完成后关闭socket
-pub async fn receive_content() -> io::Result<String> {
-    let (mut socket, _) = TcpListener::bind(CONTENT_SOCKET_ADDR)
-        .await?
-        .accept()
-        .await?;
-    // 通知发送方tcp已打开
+/// 开始临时监听addr，接受长内容，完成后关闭socket
+pub async fn receive_content(listener: &TcpListener) -> io::Result<String> {
+    let (mut socket, _) = listener.accept().await?;
+    // 读取文件内容
     let mut buffer = String::new();
     let n = socket.read_to_string(&mut buffer).await?;
-    socket.shutdown().await?;
     if n == 0 {
         Err(std::io::Error::new(
             io::ErrorKind::InvalidData,

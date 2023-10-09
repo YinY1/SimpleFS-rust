@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     hash::Hash,
     io::{Error, ErrorKind},
-    sync::Arc,
 };
 
 use async_recursion::async_recursion;
@@ -18,7 +17,6 @@ use crate::{
     },
     fs_constants::*,
     inode::{Inode, InodeType},
-    simple_fs::SFS,
     user,
 };
 
@@ -351,25 +349,21 @@ pub async fn remove_directory(
 }
 
 /// 进入某目录（将current inode更换为所指目录项的inode), 如果有错误信息则返回
-pub async fn cd(path: &str) -> Result<(), Error> {
-    let fs = Arc::clone(&SFS);
+pub async fn cd(path: &str, current_inode: &Inode) -> Result<Inode, Error> {
     //将绝对路径分割为多段
     let paths: Vec<&str> = path.split('/').collect();
-    let mut current_inode = fs.read().await.current_inode.clone();
+    let mut current_inode = current_inode.clone();
     // 循环复合目录(除去~)
     for &path in &paths[1..] {
         // 找不到了便返回Err
         match try_cd(path, &current_inode).await {
             Ok(inode) => current_inode = inode,
             Err(e) => {
-                let root = fs.read().await.root_inode.clone();
-                fs.write().await.current_inode = root;
                 return Err(e);
             }
         }
     }
-    fs.write().await.current_inode = current_inode;
-    Ok(())
+    Ok(current_inode)
 }
 
 /// 尝试进入某目录

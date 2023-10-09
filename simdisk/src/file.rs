@@ -1,7 +1,9 @@
 use std::io::{Error, ErrorKind};
 
-use shell::receive_content;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+};
 
 use crate::{
     block::{get_all_blocks, insert_object, remove_object, write_file_content_to_blocks},
@@ -37,12 +39,15 @@ pub async fn create_file(
     if is_copy {
         inputs = content.to_owned();
     } else {
-        // 2.ex1.1 向client告知需要输入内容
-        socket
-            .write_all(shell::INPUT_FILE_CONTENT.as_bytes())
-            .await?;
+        // 建立临时socket，端口随机
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        // 2.ex1.1 向client告知需要输入内容，同时发送端口
+        let addr = listener.local_addr()?.to_string();
+        let msg = [shell::INPUT_FILE_CONTENT, &addr].concat();
+        socket.write_all(msg.as_bytes()).await?;
         // 2.ex1.2 client 读取文件内容
-        inputs = receive_content().await?;
+        info!("receiving contents through {}", addr);
+        inputs = shell::receive_content(&listener).await?;
         if inputs.len() > MAX_FILE_SIZE {
             return Err(Error::new(ErrorKind::OutOfMemory, "File size limit exceed"));
         }

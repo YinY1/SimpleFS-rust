@@ -10,15 +10,10 @@ use crate::{
 };
 
 /// 打印
-pub async fn info(cwd: &str) -> io::Result<Option<String>> {
-    let res = temp_cd_and_do(&[cwd, "/"].concat(), false, |_, current_inode| {
-        Box::pin(async move {
-            let fs = Arc::clone(&SFS);
-            let read_lock = fs.read().await;
-            Ok(Some(read_lock.info(current_inode).await))
-        })
-    })
-    .await?;
+pub async fn info() -> io::Result<Option<String>> {
+    let fs = Arc::clone(&SFS);
+    let read_lock = fs.read().await;
+    let res = Some(read_lock.info().await);
     trace!("finished cmd: info");
     Ok(res)
 }
@@ -163,8 +158,6 @@ pub async fn copy(
 
 /// 查看超级块是否损坏，并查看位图是否出错
 pub async fn check() -> io::Result<()> {
-    let fs = Arc::clone(&SFS);
-    fs.write().await.reset_sp().await;
     simple_fs::check_bitmaps_and_fix().await?;
     trace!("finished cmd: check");
     Ok(())
@@ -196,22 +189,19 @@ pub async fn formatting() -> io::Result<()> {
 /// f 返回 Error(msg)代表f执行失败，返回ok代表成功
 ///
 /// 最后该函数返回从f得到的失败信息err结果，f成功则返回ok
-async fn temp_cd_and_do<'a, F, T>(
-    mut absolute_path: &'a str,
-    need_sync: bool,
-    f: F,
-) -> io::Result<T>
+async fn temp_cd_and_do<'a, F, T>(absolute_path: &'a str, need_sync: bool, f: F) -> io::Result<T>
 where
     F: FnOnce(&'a str, Inode) -> Pin<Box<dyn Future<Output = io::Result<T>> + 'a + Send>>,
 {
     let mut current_inode = Arc::clone(&SFS).read().await.root_inode.clone();
+    let mut name = None;
     if let Some((path, filename)) = absolute_path.rsplit_once('/') {
         // 尝试进入目录
         current_inode = dirent::cd(path, &current_inode).await?;
-        absolute_path = filename;
+        name = Some(filename)
     }
     // 执行f的操作，失败则f的错误信息
-    match f(absolute_path, current_inode).await {
+    match f(name.unwrap(), current_inode).await {
         Ok(ok) => {
             if need_sync {
                 sync_all_block_cache().await?;

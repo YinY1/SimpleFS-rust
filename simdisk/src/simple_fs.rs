@@ -19,9 +19,8 @@ use crate::{
 #[allow(unused)]
 #[derive(Default)]
 pub struct SimpleFileSystem {
-    pub root_inode: Inode,       //文件系统的根节点
-    pub super_block: SuperBlock, //超级块的信息
-    pub user_infos: User,        // 文件系统的用户信息
+    pub root_inode: Inode, //文件系统的根节点
+    pub user_infos: User,  // 文件系统的用户信息
 }
 
 impl SimpleFileSystem {
@@ -31,7 +30,6 @@ impl SimpleFileSystem {
         let root_inode = Inode::read(0).await.unwrap();
         *self = Self {
             root_inode,
-            super_block: SuperBlock::read().await.unwrap(),
             user_infos: User::read().await.unwrap(),
         };
     }
@@ -52,19 +50,28 @@ impl SimpleFileSystem {
     }
 
     /// 打印文件系统的信息
-    pub async fn info(&self, current_inode: Inode) -> String {
+    pub async fn info(&self) -> String {
+        let (fs_size, fs_unit) = show_unit(FS_SIZE);
         let (alloced_inodes, valid_inodes) = count_inodes().await;
         let (alloced, valid) = count_data_blocks().await;
-        let (alloced_size, used_unit) = show_unit(alloced * BLOCK_SIZE);
+        let (used_size, used_unit) = show_unit(alloced * BLOCK_SIZE);
         let (valid_size, valid_unit) = show_unit(valid * BLOCK_SIZE);
+        let use_percent = (alloced as f32 / (alloced + valid) as f32) * 100.0;
+        let i_use_percent = (alloced_inodes as f32 / INODE_MAX_NUM as f32) * 100.0;
         let infos = vec![
-            format!("-----------------------\n"),
-            format!("{:#?}\n", self.super_block),
-            format!("{:#?}\n", current_inode),
-            format!("[Inode  used] {}\n", alloced_inodes),
-            format!("[Inode valid] {}\n", valid_inodes),
-            format!("[Disk   used] {}{}\n", alloced_size, used_unit),
-            format!("[Disk  valid] {}{}\n", valid_size, valid_unit),
+            String::from(
+                "Filesystem\tSize\tUsed\tAVail\tUse%\tInodes\tIUsed\tIFree\tIUse%\tMounted on\n",
+            ),
+            format!("SimpleFS\t{}{}\t", fs_size, fs_unit,),
+            format!(
+                "{:.1}{}\t{:.1}{}\t{:.1}%\t",
+                used_size, used_unit, valid_size, valid_unit, use_percent
+            ),
+            format!(
+                "{}\t{}\t{}\t{:.1}%\t",
+                INODE_MAX_NUM, alloced_inodes, valid_inodes, i_use_percent
+            ),
+            String::from("~"),
         ];
         infos.concat()
     }
@@ -79,7 +86,7 @@ impl SimpleFileSystem {
         blk.write().await.block_cache.clear();
 
         // 创建超级块
-        let super_block = SuperBlock::new().await;
+        SuperBlock::init().await;
 
         // 创建root_inode
         let root_inode = Inode::new_root().await;
@@ -92,15 +99,8 @@ impl SimpleFileSystem {
 
         *self = Self {
             root_inode,
-            super_block,
             user_infos: user_info,
         };
-    }
-
-    /// 重置超级块
-    pub async fn reset_sp(&mut self) {
-        let sp = SuperBlock::new().await;
-        self.super_block = sp;
     }
 
     /// 登录

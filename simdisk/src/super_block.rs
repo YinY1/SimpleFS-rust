@@ -35,9 +35,9 @@ pub struct SuperBlock {
 #[allow(unused)]
 impl SuperBlock {
     /// 初始化超级块
-    pub async fn new() -> Self {
+    pub async fn init() {
         trace!("init super block");
-        let sb = Self {
+        Self {
             fs_size: FS_SIZE / BLOCK_SIZE,
             first_inode: INODE_START_BLOCK,
             inode_area_size: INODE_BLOCK_NUM,
@@ -48,9 +48,9 @@ impl SuperBlock {
             first_block_of_data_bitmap: DATA_BITMAP_START_BLOCK,
             data_bitmap_size: DATA_BITMAP_NUM,
             magic: MAGIC,
-        };
-        sb.cache().await;
-        sb
+        }
+        .cache()
+        .await;
     }
 
     async fn cache(&self) {

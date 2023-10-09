@@ -88,6 +88,12 @@ pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Resu
     match dirent.get_block_id_and_try_update(parent_inode).await {
         Err(err) => Err(err),
         Ok((level, block_id)) => {
+            if dirent.is_dir {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    format!("{} is not a file", name),
+                ));
+            }
             let mut inode = Inode::read(dirent.inode_id as usize).await?;
             if !user::able_to_modify(gid, inode.gid) {
                 return Err(Error::new(

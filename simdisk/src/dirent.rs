@@ -27,8 +27,8 @@ use crate::{
 pub struct DirEntry {
     filename: [u8; NAME_LENGTH_LIMIT],       //文件名：10B
     extension: [u8; EXTENSION_LENGTH_LIMIT], //扩展名: 3B
-    pub is_dir: bool,
-    pub inode_id: u16, //inode号: 2B
+    pub is_dir: bool,                        //目录标志：1B
+    pub inode_id: u16,                       //inode号: 2B
 }
 
 impl PartialEq for DirEntry {

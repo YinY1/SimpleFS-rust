@@ -159,7 +159,7 @@ pub fn create_fs_file() -> Result<(), Error> {
     File::create(FS_FILE_NAME)?.write_all(&[0u8; FS_SIZE])
 }
 
-// 全局变量，管理各种信息
+//延迟加载全局变量 SFS
 lazy_static! {
     pub static ref SFS: Arc<RwLock<SimpleFileSystem>> =
         Arc::new(RwLock::new(SimpleFileSystem::default()));

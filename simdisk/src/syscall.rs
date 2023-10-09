@@ -11,28 +11,25 @@ use crate::{
 
 /// 打印
 pub async fn info(cwd: &str) -> Result<Option<String>, Error> {
-    let mut res = None;
-    temp_cd_and_do(&[cwd, "/"].concat(), false, |_| {
+    let res = temp_cd_and_do(&[cwd, "/"].concat(), false, |_| {
         Box::pin(async {
             let fs = Arc::clone(&SFS);
-            res = Some(fs.read().await.info().await);
-            Ok(())
+            let read_lock = fs.read().await;
+            Ok(Some(read_lock.info().await))
         })
     })
     .await?;
-
     trace!("finished cmd: info");
     Ok(res)
 }
 
 /// 展示目录信息
 pub async fn ls(username: &str, path: &str, detail: bool) -> Result<Option<String>, Error> {
-    let mut infos = None;
-    temp_cd_and_do(&[path, "/"].concat(), false, |_| {
+    let infos = temp_cd_and_do(&[path, "/"].concat(), false, |_| {
         Box::pin(async {
             let fs = Arc::clone(&SFS);
-            infos = Some(fs.read().await.current_inode.ls(username, detail).await);
-            Ok(())
+            let read_lock = fs.read().await;
+            Ok(Some(read_lock.current_inode.ls(username, detail).await))
         })
     })
     .await?;
@@ -131,8 +128,8 @@ pub async fn cat(name: &str) -> Result<Option<String>, Error> {
     let content = temp_cd_and_do(name, false, |n| {
         Box::pin(async move {
             let fs = Arc::clone(&SFS);
-            let r = fs.read().await;
-            file::get_file_content(n, &r.current_inode).await
+            let read_lock = fs.read().await;
+            file::get_file_content(n, &read_lock.current_inode).await
         })
     })
     .await?;
@@ -147,22 +144,21 @@ pub async fn copy(
     target_path: &str,
     socket: &mut TcpStream,
 ) -> Result<(), Error> {
-    let mut content = String::new();
-    // 访问host目录
-    if source_path.starts_with("<host>") {
+    let content = if source_path.starts_with("<host>") {
+        // 访问host目录
         let path = source_path.strip_prefix("<host>").unwrap();
-        content = std::fs::read_to_string(path)?;
+        std::fs::read_to_string(path)?
     } else {
+        // 从系统中取出内容
         temp_cd_and_do(source_path, false, |name| {
             Box::pin(async {
                 let fs = Arc::clone(&SFS);
-                let r = fs.read().await;
-                content = file::get_file_content(name, &r.current_inode).await?;
-                Ok(())
+                let read_lock = fs.read().await;
+                file::get_file_content(name, &read_lock.current_inode).await
             })
         })
-        .await?;
-    }
+        .await?
+    };
     trace!("finished get source contents");
     temp_cd_and_do(target_path, true, |name| {
         Box::pin(async move {

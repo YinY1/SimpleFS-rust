@@ -23,9 +23,9 @@ use crate::{
 pub type BlockIDType = u32;
 #[derive(Clone, Debug)]
 pub struct Block {
-    pub block_id: usize,
-    pub bytes: [u8; BLOCK_SIZE],
-    pub modified: bool,
+    pub block_id: usize,         //块编号
+    pub bytes: [u8; BLOCK_SIZE], //块的字节内容
+    pub modified: bool,          //是否修改位，用于缓存写入
 }
 
 impl PartialEq for Block {
@@ -42,25 +42,6 @@ impl Block {
         f(&mut self.bytes);
         self.modified = true;
     }
-
-    /// 将块缓存写入本地文件
-    async fn sync_block(&mut self) -> Result<(), Error> {
-        if self.modified {
-            if let Ok(mut file) = tokio::fs::OpenOptions::new()
-                .write(true)
-                .open(FS_FILE_NAME)
-                .await
-            {
-                let buf = self.bytes;
-                trace!("drop block {}", self.block_id);
-                let offset = self.block_id * BLOCK_SIZE;
-                let pos = tokio::io::SeekFrom::Start(offset as u64);
-                file.seek(pos).await?;
-                file.write_all(&buf).await?;
-            }
-        }
-        Ok(())
-    }
 }
 
 pub struct BlockCacheManager {
@@ -76,9 +57,31 @@ impl BlockCacheManager {
 
     /// 将所有块缓存写入磁盘，同时清空缓存
     pub async fn sync_and_clear_cache(&mut self) -> Result<(), Error> {
+        let mut file = None;
         for block in self.block_cache.values_mut() {
-            block.sync_block().await?;
+            if !block.modified {
+                continue;
+            }
+
+            if file.is_none() {
+                file = Some(
+                    tokio::fs::OpenOptions::new()
+                        .write(true)
+                        .open(FS_FILE_NAME)
+                        .await?,
+                )
+            }
+
+            if let Some(file) = &mut file {
+                let buf = block.bytes;
+                trace!("sync block {}", block.block_id);
+                let offset = block.block_id * BLOCK_SIZE;
+                let pos = tokio::io::SeekFrom::Start(offset as u64);
+                file.seek(pos).await?;
+                file.write_all(&buf).await?;
+            }
         }
+
         self.block_cache.clear();
         Ok(())
     }
@@ -150,6 +153,7 @@ pub async fn get_blocks_buffers(
     Ok(buffers)
 }
 
+/// 将文件内容分组批量写入缓存
 pub async fn write_file_content_to_blocks(
     contents: &[String],
     block_ids: &[usize],
@@ -181,6 +185,7 @@ pub async fn write_block<T: serde::Serialize>(
     write_blocks(&[(object, block_id, start_byte)]).await
 }
 
+/// 批量将object写入块中， args为（object，block_id, start_byte）数组
 pub async fn write_blocks<T: serde::Serialize>(
     object_args: &[(&T, usize, usize)],
 ) -> Result<(), Error> {
@@ -632,6 +637,7 @@ pub async fn check_data_and_fix() -> Result<(), Error> {
     Ok(())
 }
 
+//延迟加载全局变量 BLOCK_CACHE_MANAGER
 lazy_static! {
     pub static ref BLOCK_CACHE_MANAGER: Arc<RwLock<BlockCacheManager>> =
         Arc::new(RwLock::new(BlockCacheManager::new()));

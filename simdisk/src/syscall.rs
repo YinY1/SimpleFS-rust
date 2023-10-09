@@ -26,12 +26,12 @@ pub async fn info(cwd: &str) -> Result<Option<String>, Error> {
 }
 
 /// 展示目录信息
-pub async fn ls(path: &str, detail: bool) -> Result<Option<String>, Error> {
+pub async fn ls(username: &str, path: &str, detail: bool) -> Result<Option<String>, Error> {
     let mut infos = None;
     temp_cd_and_do(&[path, "/"].concat(), false, |_| {
         Box::pin(async {
             let fs = Arc::clone(&SFS);
-            infos = Some(fs.read().await.current_inode.ls(detail).await);
+            infos = Some(fs.read().await.current_inode.ls(username, detail).await);
             Ok(())
         })
     })
@@ -41,10 +41,10 @@ pub async fn ls(path: &str, detail: bool) -> Result<Option<String>, Error> {
 }
 
 /// 创建目录
-pub async fn mkdir(name: &str) -> Result<(), Error> {
-    temp_cd_and_do(name, true, |n| {
+pub async fn mkdir(username: &str, dir_name: &str) -> Result<(), Error> {
+    temp_cd_and_do(dir_name, true, |n| {
         Box::pin(async move {
-            let (gid, uid) = get_current_user_ids().await;
+            let (gid, uid) = get_current_user_ids(username).await;
             let fs = Arc::clone(&SFS);
             let mut fs_write_lock = fs.write().await;
             dirent::make_directory(n, &mut fs_write_lock.current_inode, gid, uid).await
@@ -56,10 +56,10 @@ pub async fn mkdir(name: &str) -> Result<(), Error> {
 }
 
 /// 删除目录，包括其中的文件和子目录
-pub async fn rmdir(name: &str, socket: &mut TcpStream) -> Result<(), Error> {
-    temp_cd_and_do(name, true, |n| {
+pub async fn rmdir(username: &str, dir_name: &str, socket: &mut TcpStream) -> Result<(), Error> {
+    temp_cd_and_do(dir_name, true, |n| {
         Box::pin(async move {
-            let (gid, _) = get_current_user_ids().await;
+            let (gid, _) = get_current_user_ids(username).await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
             dirent::remove_directory(n, &mut w.current_inode, socket, gid).await
@@ -83,10 +83,15 @@ pub async fn cd(path: &str) -> Result<(), Error> {
 }
 
 /// 创建新文件
-pub async fn new_file(name: &str, mode: FileMode, socket: &mut TcpStream) -> Result<(), Error> {
-    temp_cd_and_do(name, true, |n| {
+pub async fn new_file(
+    username: &str,
+    filename: &str,
+    mode: FileMode,
+    socket: &mut TcpStream,
+) -> Result<(), Error> {
+    temp_cd_and_do(filename, true, |n| {
         Box::pin(async move {
-            let user_id = get_current_user_ids().await;
+            let user_id = get_current_user_ids(username).await;
             let fs = Arc::clone(&SFS);
             let mut fs_write_lock = fs.write().await;
             file::create_file(
@@ -107,17 +112,17 @@ pub async fn new_file(name: &str, mode: FileMode, socket: &mut TcpStream) -> Res
 }
 
 /// 删除文件
-pub async fn del(name: &str) -> Result<(), Error> {
-    temp_cd_and_do(name, true, |n| {
+pub async fn del(username: &str, filename: &str) -> Result<(), Error> {
+    temp_cd_and_do(filename, true, |n| {
         Box::pin(async move {
-            let (gid, _) = get_current_user_ids().await;
+            let (gid, _) = get_current_user_ids(username).await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
             file::remove_file(n, &mut w.current_inode, gid).await
         })
     })
     .await?;
-    trace!("finished cmd: del [{}]", name);
+    trace!("finished cmd: del [{}]", filename);
     Ok(())
 }
 
@@ -137,6 +142,7 @@ pub async fn cat(name: &str) -> Result<Option<String>, Error> {
 
 /// 复制文件
 pub async fn copy(
+    username: &str,
     source_path: &str,
     target_path: &str,
     socket: &mut TcpStream,
@@ -160,7 +166,7 @@ pub async fn copy(
     trace!("finished get source contents");
     temp_cd_and_do(target_path, true, |name| {
         Box::pin(async move {
-            let user_id = get_current_user_ids().await;
+            let user_id = get_current_user_ids(username).await;
             let fs = Arc::clone(&SFS);
             let mut w = fs.write().await;
             file::create_file(
@@ -190,9 +196,11 @@ pub async fn check() -> Result<(), Error> {
 }
 
 /// 获取所有用户信息
-pub async fn get_users_info() -> Result<Option<String>, Error> {
+pub async fn get_users_info(username: &str) -> Result<Option<String>, Error> {
     let fs = Arc::clone(&SFS);
-    let users = fs.read().await.get_users_info()?;
+    let read_lock = fs.read().await;
+    let current_gid = read_lock.get_user_gid(username)?;
+    let users = read_lock.get_users_info(current_gid)?;
     trace!("finished cmd: users");
     Ok(Some(format!("{:#?}", users)))
 }
@@ -244,8 +252,9 @@ where
 }
 
 /// 获取当前用户的id
-async fn get_current_user_ids() -> (u16, u16) {
+async fn get_current_user_ids(username: &str) -> (u16, u16) {
     let fs = Arc::clone(&SFS);
     let r = fs.read().await;
-    (r.current_user.gid, r.current_user.uid)
+    let ids = r.get_user_ids(username).unwrap();
+    (ids.gid, ids.uid)
 }

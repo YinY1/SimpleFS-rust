@@ -52,12 +52,12 @@ impl User {
         Ok(())
     }
 
-    /// 登录，成功后返回用户id
-    pub fn sign_in(&self, username: &str, password: &str) -> Result<UserIdGroup, Error> {
+    /// 登录
+    pub fn sign_in(&self, username: &str, password: &str) -> Result<(), Error> {
         match self.0.get(username) {
             Some(info) => {
                 if info.0 == password {
-                    return Ok(info.1.clone());
+                    return Ok(());
                 }
                 Err(Error::new(
                     std::io::ErrorKind::PermissionDenied,

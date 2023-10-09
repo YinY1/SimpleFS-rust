@@ -18,15 +18,14 @@ use crate::{
 
 #[allow(unused)]
 #[derive(Default)]
-pub struct SampleFileSystem {
-    pub root_inode: Inode,
-    pub super_block: SuperBlock,
-    pub current_inode: Inode,
-    pub user_infos: User,
-    pub current_user: UserIdGroup,
+pub struct SimpleFileSystem {
+    pub root_inode: Inode,       //文件系统的根节点
+    pub super_block: SuperBlock, //超级块的信息
+    pub current_inode: Inode,    // 临时记录操作的当前节点
+    pub user_infos: User,        // 文件系统的用户信息
 }
 
-impl SampleFileSystem {
+impl SimpleFileSystem {
     /// 从文件系统中读出相关信息
     pub async fn read(&mut self) {
         trace!("read SFS");
@@ -36,7 +35,6 @@ impl SampleFileSystem {
             root_inode,
             super_block: SuperBlock::read().await.unwrap(),
             user_infos: User::read().await.unwrap(),
-            current_user: UserIdGroup::default(),
         };
     }
     /// 只从文件系统读出可能更改的root inode信息
@@ -99,7 +97,6 @@ impl SampleFileSystem {
             root_inode,
             super_block,
             user_infos: user_info,
-            current_user: UserIdGroup::default(),
         };
     }
 
@@ -111,9 +108,7 @@ impl SampleFileSystem {
 
     /// 登录
     pub fn sign_in(&mut self, username: &str, password: &str) -> Result<(), Error> {
-        let info = self.user_infos.sign_in(username, password)?;
-        self.current_user = info;
-        Ok(())
+        self.user_infos.sign_in(username, password)
     }
 
     /// 注册
@@ -122,8 +117,8 @@ impl SampleFileSystem {
     }
 
     /// root态下获取所有用户的信息
-    pub fn get_users_info(&self) -> Result<UserInfo, Error> {
-        if self.current_user.gid != 0 {
+    pub fn get_users_info(&self, gid: u16) -> Result<UserInfo, Error> {
+        if gid != 0 {
             Err(Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "not in root",
@@ -136,6 +131,20 @@ impl SampleFileSystem {
     /// 根据uid获取用户名
     pub fn get_username(&self, uid: u16) -> Result<String, Error> {
         self.user_infos.get_user_name(uid)
+    }
+
+    /// 根据用户名获取id组
+    pub fn get_user_ids(&self, username: &str) -> Result<UserIdGroup, Error> {
+        let info = self.user_infos.0.get(username).ok_or(Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no such user: {}", username),
+        ))?;
+        Ok(info.1.clone())
+    }
+
+    /// 根据用户名获取gid
+    pub fn get_user_gid(&self, username: &str) -> Result<u16, Error> {
+        Ok(self.get_user_ids(username)?.gid)
     }
 }
 
@@ -152,8 +161,8 @@ pub fn create_fs_file() -> Result<(), Error> {
 
 // 全局变量，管理各种信息
 lazy_static! {
-    pub static ref SFS: Arc<RwLock<SampleFileSystem>> =
-        Arc::new(RwLock::new(SampleFileSystem::default()));
+    pub static ref SFS: Arc<RwLock<SimpleFileSystem>> =
+        Arc::new(RwLock::new(SimpleFileSystem::default()));
 }
 
 pub fn show_unit(size: usize) -> (f32, String) {

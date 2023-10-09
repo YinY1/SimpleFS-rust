@@ -79,8 +79,8 @@ async fn main() -> io::Result<()> {
             _ => {}
         }
 
-        // 2.1 将cwd+指令发给server
-        let cmd = [&cwd, " ", input].concat();
+        // 2.1 将username+ cwd +指令发给server
+        let cmd = [&username, " ", &cwd, " ", input].concat();
         stream.write_all(cmd.as_bytes()).await?;
 
         // 2.3 读取返回信息，如果是需要继续输入信息的，则回复，否则不回复

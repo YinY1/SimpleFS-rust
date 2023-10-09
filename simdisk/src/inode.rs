@@ -327,7 +327,7 @@ impl Inode {
     }
 
     /// 展示当前inode目录的信息
-    pub async fn ls(&self, detail: bool) -> String {
+    pub async fn ls(&self, username: &str, detail: bool) -> String {
         assert!(self.is_dir());
         let mut dir_infos = String::new();
         for (_, _, dir) in DirEntry::get_all_dirent(self).await.unwrap().iter() {
@@ -342,9 +342,10 @@ impl Inode {
                 let time = cal_date(inode.time_info);
                 let fs = Arc::clone(&SFS);
                 let fs_read_lock = fs.read().await;
-                let username = fs_read_lock.get_username(inode.uid).unwrap();
+                let current_user_gid = fs_read_lock.get_user_gid(username).unwrap();
+                let creator_name = fs_read_lock.get_username(inode.uid).unwrap();
                 // 对于权限不足的用户展示只读，否则展示原本的模式
-                let mode = if user::able_to_modify(fs_read_lock.current_user.gid, inode.gid) {
+                let mode = if user::able_to_modify(current_user_gid, inode.gid) {
                     inode.mode
                 } else {
                     FileMode::RDONLY
@@ -352,7 +353,7 @@ impl Inode {
 
                 let mut infos = format!(
                     "\taddr:{:x?}\t\t\tInode:{}\n\tcreated: {:#?}\t{:?}  \tBy: {:?}",
-                    addr, inode.inode_id, time, mode, username,
+                    addr, inode.inode_id, time, mode, creator_name,
                 );
                 if !dir.is_dir {
                     // 是文件 加上文件大小

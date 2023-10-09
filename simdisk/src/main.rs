@@ -100,7 +100,7 @@ async fn main() -> io::Result<()> {
                 } else if command == EMPTY_INPUT {
                     continue;
                 }
-                // args[0]为cwd
+                // args[0]为username args[1]为cwd
                 let args: Vec<&str> = command.split_whitespace().collect();
 
                 let start = tokio::time::Instant::now();
@@ -139,8 +139,9 @@ async fn do_command(
         args,
         socket.peer_addr().unwrap()
     );
-    let cwd = args[0];
-    let commands: Vec<String> = args[1..]
+    let username = args[0];
+    let cwd = args[1];
+    let commands: Vec<String> = args[2..]
         .iter()
         .map(|&arg| arg.replace('\0', "").trim().to_string())
         .collect();
@@ -148,19 +149,19 @@ async fn do_command(
     if commands[0].as_str() == "dir" {
         if commands.last().unwrap() == "/s" {
             match commands.len() {
-                2 => syscall::ls(cwd, true).await,
+                2 => syscall::ls(username, cwd, true).await,
                 3 => {
                     let target_path = get_absolute_path(cwd, &commands[1]);
-                    syscall::ls(&target_path, true).await
+                    syscall::ls(username, &target_path, true).await
                 }
                 _ => Err(error_arg()),
             }
         } else {
             match commands.len() {
-                1 => syscall::ls(cwd, false).await,
+                1 => syscall::ls(username, cwd, false).await,
                 2 => {
                     let target_path = get_absolute_path(cwd, &commands[1]);
-                    syscall::ls(&target_path, false).await
+                    syscall::ls(username, &target_path, false).await
                 }
                 _ => Err(error_arg()),
             }
@@ -170,7 +171,7 @@ async fn do_command(
             1 => match commands[0].as_str() {
                 "info" => syscall::info(cwd).await,
                 "check" => syscall::check().await.map(|_| None),
-                "users" => syscall::get_users_info().await,
+                "users" => syscall::get_users_info(username).await,
                 "formatting" => syscall::formatting().await.map(|_| None),
                 _ => Err(error_arg()),
             },
@@ -178,22 +179,22 @@ async fn do_command(
                 let name = get_absolute_path(cwd, &commands[1]);
                 match commands[0].as_str() {
                     "cd" => syscall::cd(&name).await.map(|_| None),
-                    "md" => syscall::mkdir(&name).await.map(|_| None),
+                    "md" => syscall::mkdir(username, &name).await.map(|_| None),
                     // 对于rd 要等待client确认是否删除
-                    "rd" => syscall::rmdir(&name, socket).await.map(|_| None),
+                    "rd" => syscall::rmdir(username, &name, socket).await.map(|_| None),
                     // 对于newfile 需要输入文件内容，要等待client传输内容
-                    "newfile" => syscall::new_file(&name, FileMode::RDWR, socket)
+                    "newfile" => syscall::new_file(username, &name, FileMode::RDWR, socket)
                         .await
                         .map(|_| None),
                     "cat" => syscall::cat(&name).await,
-                    "del" => syscall::del(&name).await.map(|_| None),
+                    "del" => syscall::del(username, &name).await.map(|_| None),
                     _ => Err(error_arg()),
                 }
             }
             3 => match commands[0].as_str() {
                 "copy" => {
                     let target_path = get_absolute_path(cwd, &commands[2]);
-                    syscall::copy(commands[1].as_str(), &target_path, socket)
+                    syscall::copy(username, commands[1].as_str(), &target_path, socket)
                         .await
                         .map(|_| None)
                 }

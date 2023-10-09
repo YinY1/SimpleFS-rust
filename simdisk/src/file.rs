@@ -122,7 +122,13 @@ pub async fn get_file_content(name: &str, parent_inode: &Inode) -> Result<String
         let mut content = String::new();
         for (_, _, block) in blocks {
             let string = String::from_utf8_lossy(&block).to_string();
-            content.push_str(&string);
+            // 找到\0的位置
+            let end_pos = string.find('\0').unwrap_or(string.len());
+            content.push_str(&string[..end_pos]);
+            if end_pos < string.len() {
+                // 如果出现了\0，直接终止返回
+                break;
+            }
         }
         Ok(content)
     }

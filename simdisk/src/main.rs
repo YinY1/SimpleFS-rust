@@ -103,6 +103,10 @@ async fn main() -> io::Result<()> {
                 // args[0]为username args[1]为cwd
                 let args: Vec<&str> = command.split_whitespace().collect();
 
+                if args[2] == "formatting" {
+                    is_login = false;
+                }
+
                 let start = tokio::time::Instant::now();
                 // 2.2 传输命令执行后的信息
                 let msg = match do_command(args, &mut socket).await {
@@ -110,9 +114,6 @@ async fn main() -> io::Result<()> {
                     Err(err) => {
                         error!("send err back to socket: {:?}, err= {}", addr, err);
                         Some([ERROR_MESSAGE_PREFIX, &err.to_string()].concat())
-                        /* socket.write_all(RECEIVE_CONTENTS.as_bytes()).await.unwrap();
-                        let err_msg = [ERROR_MESSAGE_PREFIX, &err.to_string()].concat();
-                        send_content(err_msg).await.unwrap(); */
                     }
                 };
                 // 2.3 如果有信息要传输

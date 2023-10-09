@@ -16,14 +16,20 @@ pub struct UserIdGroup {
 pub type UserInfo = HashMap<String, (String, UserIdGroup)>;
 
 #[derive(Serialize, Deserialize, Default)]
-pub struct User(pub UserInfo);
+pub struct User {
+    pub info: UserInfo, // 存储所有用户的信息
+    max_id: u16,
+}
 
 impl User {
     /// 初始化创建root用户
     pub async fn init() -> Self {
-        let mut s = Self(HashMap::new());
+        let mut s = Self {
+            info: HashMap::new(),
+            max_id: 1,
+        };
         let info = UserIdGroup { gid: 0, uid: 0 };
-        s.0.insert("root".to_owned(), ("admin".to_owned(), info));
+        s.info.insert("root".to_owned(), ("admin".to_owned(), info));
         s.cache().await;
         s
     }
@@ -36,7 +42,7 @@ impl User {
 
     /// 注册用户
     pub async fn sign_up(&mut self, username: &str, password: &str) -> Result<(), Error> {
-        if self.0.contains_key(username) {
+        if self.info.contains_key(username) {
             return Err(Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "user exists",
@@ -44,9 +50,10 @@ impl User {
         }
         let info = UserIdGroup {
             gid: 1,
-            uid: self.get_user_num() as u16 + 1,
+            uid: self.max_id + 1,
         };
-        self.0
+        self.max_id += 1;
+        self.info
             .insert(username.to_owned(), (password.to_owned(), info));
         self.cache().await;
         Ok(())
@@ -54,7 +61,7 @@ impl User {
 
     /// 登录
     pub fn sign_in(&self, username: &str, password: &str) -> Result<(), Error> {
-        match self.0.get(username) {
+        match self.info.get(username) {
             Some(info) => {
                 if info.0 == password {
                     return Ok(());
@@ -73,7 +80,7 @@ impl User {
 
     /// 根据uid得到用户名
     pub fn get_user_name(&self, uid: u16) -> Result<String, Error> {
-        match self.0.iter().find_map(|(username, (_, ids))| {
+        match self.info.iter().find_map(|(username, (_, ids))| {
             if ids.uid == uid {
                 Some(username.to_string())
             } else {
@@ -83,10 +90,6 @@ impl User {
             Some(username) => Ok(username),
             None => Err(Error::new(std::io::ErrorKind::NotFound, "user not exists")),
         }
-    }
-
-    fn get_user_num(&self) -> usize {
-        self.0.len() - 1
     }
 
     async fn cache(&self) {

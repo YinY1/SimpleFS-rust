@@ -42,8 +42,8 @@ impl SimpleFileSystem {
     pub async fn init(&mut self) -> Result<(), Error> {
         let sp = SuperBlock::read().await?;
         if sp.valid() {
-            trace!("no need to init fs");
             self.read().await;
+            trace!("no need to init fs");
             return Ok(());
         }
         Err(Error::new(std::io::ErrorKind::Other, "sp broken"))
@@ -121,7 +121,7 @@ impl SimpleFileSystem {
                 "not in root",
             ))
         } else {
-            Ok(self.user_infos.0.clone())
+            Ok(self.user_infos.info.clone())
         }
     }
 
@@ -132,7 +132,7 @@ impl SimpleFileSystem {
 
     /// 根据用户名获取id组
     pub fn get_user_ids(&self, username: &str) -> Result<UserIdGroup, Error> {
-        let info = self.user_infos.0.get(username).ok_or(Error::new(
+        let info = self.user_infos.info.get(username).ok_or(Error::new(
             std::io::ErrorKind::NotFound,
             format!("no such user: {}", username),
         ))?;

@@ -48,7 +48,7 @@ async fn main() -> io::Result<()> {
                 }
                 _ => {
                     error!("invalid arg");
-                    return Err(Error::new(ErrorKind::InvalidInput, ""));
+                    continue;
                 }
             }
         }
@@ -133,6 +133,9 @@ async fn main() -> io::Result<()> {
                 if input.starts_with("cd") {
                     // 处理cwd情况
                     deal_with_dir(input, &mut cwd);
+                } else if input == "formatting" {
+                    // 格式化之后要退出登录
+                    is_login = false;
                 }
                 continue;
             }

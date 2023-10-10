@@ -213,8 +213,13 @@ async fn do_command(
             }
             3 => match commands[0].as_str() {
                 "copy" => {
+                    let source_path = if commands[1].starts_with("<host>") {
+                        commands[1].clone()
+                    } else {
+                        get_absolute_path(cwd, &commands[1])
+                    };
                     let target_path = get_absolute_path(cwd, &commands[2]);
-                    syscall::copy(username, commands[1].as_str(), &target_path, socket)
+                    syscall::copy(username, &source_path, &target_path, socket)
                         .await
                         .map(|_| None)
                 }

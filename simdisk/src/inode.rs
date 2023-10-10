@@ -354,7 +354,7 @@ impl Inode {
                 };
 
                 let mut infos = format!(
-                    "\taddr:{:x?}\t\t\tInode:{}\n\tcreated: {:#?}\t{:?}  \tBy: {:?}",
+                    "\taddr:{:X?}\n\tInode:{}\tcreated: {:#?}\t{:?}  \tBy: {:?}",
                     addr, inode.inode_id, time, mode, creator_name,
                 );
                 if !dir.is_dir {

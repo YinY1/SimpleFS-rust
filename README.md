@@ -72,7 +72,7 @@ pub struct DirEntry {//16B(对齐后)
 
 ## 功能
 - info
-    - 显示超级块信息，当前目录inode信息
+    - 显示文件系统的信息，类似df -h && df -i
 - dir
     - dir [path] [/s]
     - 展示当前或指定目录的信息，/s展示详细信息
@@ -96,6 +96,10 @@ pub struct DirEntry {//16B(对齐后)
     - 删除文件：删除指定文件，不存在时给出出错信息。
 - check
     - 检测并修复超级块、位图错误（强制复写超级块、位图将不必要的1修复为0）
+- formatting
+    - 格式化文件系统（清空）
+- help
+    - 打印指令列表
 - EXIT
     - 退出shell
 - users

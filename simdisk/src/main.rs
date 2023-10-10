@@ -190,7 +190,7 @@ async fn do_command(
                 "info" => syscall::info().await,
                 "check" => syscall::check().await.map(|_| None),
                 "users" => syscall::get_users_info(username).await,
-                "formatting" => syscall::formatting().await.map(|_| None),
+                "formatting" => syscall::formatting(username).await.map(|_| None),
                 _ => Err(error_arg()),
             },
             2 => {

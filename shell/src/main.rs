@@ -72,7 +72,7 @@ async fn main() -> io::Result<()> {
                 return Ok(());
             }
             HELP_REQUEST => {
-                print_help();
+                print_help(&username);
                 stream.write_all(EMPTY_INPUT.as_bytes()).await?;
                 continue;
             }
@@ -232,7 +232,7 @@ async fn read_file_content(io_reader: &mut BufReader<Stdin>) -> io::Result<Strin
     Ok(inputs)
 }
 
-fn print_help() {
+fn print_help(username: &str) {
     println!("info");
     println!("dir (path) (/s)");
     println!("cd [path]");
@@ -242,6 +242,10 @@ fn print_help() {
     println!("cat [filename]");
     println!("copy (<host>)[src path] [dst path]");
     println!("check");
+    if username == "root" {
+        println!("formatting");
+        println!("users");
+    }
     println!("EXIT");
 }
 

@@ -7,6 +7,7 @@ use crate::{
     dirent, file,
     inode::{FileMode, Inode},
     simple_fs::{self, SFS},
+    user::able_to_modify,
 };
 
 /// 打印
@@ -49,7 +50,7 @@ pub async fn rmdir(
 ) -> io::Result<()> {
     temp_cd_and_do(dir_name_absolute, true, |name, mut current_inode| {
         Box::pin(async move {
-            let (gid, _) = get_current_user_ids(username).await;
+            let gid = get_current_user_gid(username).await;
             dirent::remove_directory(name, &mut current_inode, socket, gid).await
         })
     })
@@ -98,7 +99,7 @@ pub async fn new_file(
 pub async fn del(username: &str, filename_absolute: &str) -> io::Result<()> {
     temp_cd_and_do(filename_absolute, true, |filename, mut current_inode| {
         Box::pin(async move {
-            let (gid, _) = get_current_user_ids(username).await;
+            let gid = get_current_user_gid(username).await;
             file::remove_file(filename, &mut current_inode, gid).await
         })
     })
@@ -174,8 +175,15 @@ pub async fn get_users_info(username: &str) -> io::Result<Option<String>> {
 }
 
 /// 格式化
-pub async fn formatting() -> io::Result<()> {
+pub async fn formatting(username: &str) -> io::Result<()> {
     let fs = Arc::clone(&SFS);
+    let gid = get_current_user_gid(username).await;
+    if !able_to_modify(gid, 0) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "not in root",
+        ));
+    }
     fs.write().await.force_clear().await;
     trace!("finished cmd: formatting");
     Ok(())
@@ -218,4 +226,11 @@ async fn get_current_user_ids(username: &str) -> (u16, u16) {
     let r = fs.read().await;
     let ids = r.get_user_ids(username).unwrap();
     (ids.gid, ids.uid)
+}
+
+/// 获取当前用户的gid
+async fn get_current_user_gid(username: &str) -> u16 {
+    let fs = Arc::clone(&SFS);
+    let r = fs.read().await;
+    r.get_user_gid(username).unwrap()
 }

@@ -13,7 +13,7 @@ use crate::{
     fs_constants::*,
     inode::{self, Inode},
     super_block::SuperBlock,
-    user::{User, UserIdGroup, UserInfo},
+    user::{User, UserIdGroup, UserInfo, UserIdType},
 };
 
 #[allow(unused)]
@@ -114,7 +114,7 @@ impl SimpleFileSystem {
     }
 
     /// root态下获取所有用户的信息
-    pub fn get_users_info(&self, gid: u16) -> Result<UserInfo, Error> {
+    pub fn get_users_info(&self, gid: UserIdType) -> Result<UserInfo, Error> {
         if gid != 0 {
             Err(Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -126,7 +126,7 @@ impl SimpleFileSystem {
     }
 
     /// 根据uid获取用户名
-    pub fn get_username(&self, uid: u16) -> Result<String, Error> {
+    pub fn get_username(&self, uid: UserIdType) -> Result<String, Error> {
         self.user_infos.get_user_name(uid)
     }
 
@@ -140,7 +140,7 @@ impl SimpleFileSystem {
     }
 
     /// 根据用户名获取gid
-    pub fn get_user_gid(&self, username: &str) -> Result<u16, Error> {
+    pub fn get_user_gid(&self, username: &str) -> Result<UserIdType, Error> {
         Ok(self.get_user_ids(username)?.gid)
     }
 }

@@ -6,10 +6,12 @@ use crate::{
     fs_constants::{BLOCK_SIZE, USER_START_BYTE},
 };
 
+pub type UserIdType = u16;
+
 #[derive(Serialize, Deserialize, Default, Hash, Clone, Debug)]
 pub struct UserIdGroup {
-    pub gid: u16,
-    pub uid: u16,
+    pub gid: UserIdType,
+    pub uid: UserIdType,
 }
 
 // map{username: (password, (gid,uid))}
@@ -18,7 +20,7 @@ pub type UserInfo = HashMap<String, (String, UserIdGroup)>;
 #[derive(Serialize, Deserialize, Default)]
 pub struct User {
     pub info: UserInfo, // 存储所有用户的信息
-    max_id: u16,
+    max_id: UserIdType,
 }
 
 impl User {
@@ -79,7 +81,7 @@ impl User {
     }
 
     /// 根据uid得到用户名
-    pub fn get_user_name(&self, uid: u16) -> Result<String, Error> {
+    pub fn get_user_name(&self, uid: UserIdType) -> Result<String, Error> {
         match self.info.iter().find_map(|(username, (_, ids))| {
             if ids.uid == uid {
                 Some(username.to_string())
@@ -98,6 +100,6 @@ impl User {
 }
 
 /// 判断当前uid是否有权限修改other uid创建的文件
-pub fn able_to_modify(this: u16, other: u16) -> bool {
+pub fn able_to_modify(this: UserIdType, other: UserIdType) -> bool {
     this <= other
 }

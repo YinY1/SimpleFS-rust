@@ -383,7 +383,11 @@ async fn get_block_of_first_arr(
     let mut v = Vec::new();
     let direct_buffers = get_blocks_buffers(&direct_args).await?;
     for (i, buffer) in direct_buffers.into_iter().enumerate() {
-        v.push((BlockLevel::FirstIndirect, direct_args[i].0 as u32, buffer));
+        v.push((
+            BlockLevel::FirstIndirect,
+            direct_args[i].0 as BlockIDType,
+            buffer,
+        ));
     }
     Ok(v)
 }
@@ -563,7 +567,7 @@ pub async fn remove_object<T: Serialize + Default + PartialEq + DeserializeOwned
                 return Ok(());
             }
             // 在二级块中清除一级块记录
-            write_block(&0u32, second_id, start).await?;
+            write_block(&(0 as BlockIDType), second_id, start).await?;
 
             // 最后检查二级块 如果二级块空了就把二级块也清空
             let second_block = get_block_buffer(second_id, 0, BLOCK_SIZE).await?;
@@ -592,10 +596,10 @@ async fn remove_block_addr_in_first_block(first_id: usize, block_id: usize) -> R
 
     for (i, direct_addr) in direct_addrs.iter().enumerate() {
         // 在一级块中找到了这个块的地址，清除
-        if *direct_addr == serialize(&(block_id as u32))? {
+        if *direct_addr == serialize(&(block_id as BlockIDType))? {
             exist = true;
             let start = i * BLOCK_ADDR_SIZE;
-            write_block(&0_u32, first_id, start).await?;
+            write_block(&(0 as BlockIDType), first_id, start).await?;
             break;
         }
     }

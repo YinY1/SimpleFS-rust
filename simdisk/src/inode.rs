@@ -14,20 +14,22 @@ use crate::{
     dirent::DirEntry,
     fs_constants::*,
     simple_fs::{show_unit, SFS},
-    user,
+    user::{self, UserIdType},
 };
+
+pub type InodeIdType = u16;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Inode {
     // 内存要对齐！
-    pub inode_id: u16, // inode 号
+    pub inode_id: InodeIdType, // inode 号
     pub inode_type: InodeType,
-    mode: FileMode, // 权限
-    nlink: u8,      // 硬连接数
-    pub gid: u16,   // 组id
-    uid: u16,       // 用户id
-    size: u32,      // 文件大小
-    time_info: u64, // 时间戳
+    mode: FileMode,      // 权限
+    nlink: u8,           // 硬连接数
+    pub gid: UserIdType, // 组id
+    uid: UserIdType,     // 用户id
+    size: u32,           // 文件大小
+    time_info: u64,      // 时间戳
     // 8个直接，1个一级，1个2级，最大64.25MB, 存的是block id，间接块使用数据区存放【32位地址】
     pub addr: [BlockIDType; ADDR_TOTAL_SIZE],
 }
@@ -64,7 +66,7 @@ impl Inode {
     // 创建根节点
     pub async fn new_root() -> Self {
         assert_eq!(64, INODE_SIZE);
-        let inode_id = alloc_bit(BitmapType::Inode).await.unwrap() as u16;
+        let inode_id = alloc_bit(BitmapType::Inode).await.unwrap() as InodeIdType;
         assert_eq!(0, inode_id, "re-alloc a root inode!");
         let mut root = Self {
             inode_type: InodeType::Diretory,
@@ -95,11 +97,11 @@ impl Inode {
         parent_inode: &mut Inode,
         mode: FileMode,
         size: u32,
-        gid: u16,
-        uid: u16,
+        gid: UserIdType,
+        uid: UserIdType,
     ) -> Result<Self, Error> {
         // 申请一个inode id
-        let inode_id = alloc_bit(BitmapType::Inode).await? as u16;
+        let inode_id = alloc_bit(BitmapType::Inode).await? as InodeIdType;
         let mut inode = Self {
             inode_type,
             mode,
@@ -127,8 +129,8 @@ impl Inode {
     /// 申请一个目录项的inode
     pub async fn alloc_dir_inode(
         parent_inode: &mut Inode,
-        gid: u16,
-        uid: u16,
+        gid: UserIdType,
+        uid: UserIdType,
     ) -> Result<Self, Error> {
         Self::alloc(
             InodeType::Diretory,
@@ -176,7 +178,7 @@ impl Inode {
             let start = i * BLOCK_ADDR_SIZE;
             let end = start + BLOCK_ADDR_SIZE;
             let first_block = get_block_buffer(second_id, start, end).await.unwrap();
-            let first_id: u32 = bincode::deserialize(&first_block).unwrap();
+            let first_id: BlockIDType = bincode::deserialize(&first_block).unwrap();
             if first_id == 0 {
                 break; // 完成了，跳出
             }
@@ -244,7 +246,7 @@ impl Inode {
         };
 
         let ty = BitmapType::Data;
-        let start = DATA_START_BLOCK as u32;
+        let start = DATA_START_BLOCK as BlockIDType;
         // 为直接块申请
         for i in 0..direct_nums {
             let block_id = alloc_bit(ty).await? + start;
@@ -408,7 +410,7 @@ async fn dealloc_first_arr_blocks(first_ids: &[usize]) {
     let mut direct_ids = Vec::new();
     for direct_block in direct_blocks {
         // TODO block is empty 代替
-        let id: u32 = bincode::deserialize(&direct_block).unwrap();
+        let id: BlockIDType = bincode::deserialize(&direct_block).unwrap();
         if id == 0 {
             continue;
         }

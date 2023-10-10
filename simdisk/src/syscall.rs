@@ -7,7 +7,7 @@ use crate::{
     dirent, file,
     inode::{FileMode, Inode},
     simple_fs::{self, SFS},
-    user::able_to_modify,
+    user::{able_to_modify, UserIdType},
 };
 
 /// 打印
@@ -176,7 +176,6 @@ pub async fn get_users_info(username: &str) -> io::Result<Option<String>> {
 
 /// 格式化
 pub async fn formatting(username: &str) -> io::Result<()> {
-    let fs = Arc::clone(&SFS);
     let gid = get_current_user_gid(username).await;
     if !able_to_modify(gid, 0) {
         return Err(io::Error::new(
@@ -184,6 +183,7 @@ pub async fn formatting(username: &str) -> io::Result<()> {
             "not in root",
         ));
     }
+    let fs = Arc::clone(&SFS);
     fs.write().await.force_clear().await;
     trace!("finished cmd: formatting");
     Ok(())
@@ -221,7 +221,7 @@ where
 }
 
 /// 获取当前用户的id
-async fn get_current_user_ids(username: &str) -> (u16, u16) {
+async fn get_current_user_ids(username: &str) -> (UserIdType, UserIdType) {
     let fs = Arc::clone(&SFS);
     let r = fs.read().await;
     let ids = r.get_user_ids(username).unwrap();
@@ -229,7 +229,7 @@ async fn get_current_user_ids(username: &str) -> (u16, u16) {
 }
 
 /// 获取当前用户的gid
-async fn get_current_user_gid(username: &str) -> u16 {
+async fn get_current_user_gid(username: &str) -> UserIdType {
     let fs = Arc::clone(&SFS);
     let r = fs.read().await;
     r.get_user_gid(username).unwrap()

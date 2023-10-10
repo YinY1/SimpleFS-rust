@@ -103,7 +103,7 @@ async fn main() -> io::Result<()> {
                 // args[0]为username args[1]为cwd
                 let args: Vec<&str> = command.split_whitespace().collect();
 
-                if args[2] == "formatting" {
+                if args[0] == "root" && args[2] == "formatting" {
                     is_login = false;
                 }
 

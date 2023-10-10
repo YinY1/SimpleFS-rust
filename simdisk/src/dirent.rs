@@ -16,8 +16,8 @@ use crate::{
         self, deserialize, get_all_valid_blocks, get_blocks_buffers, insert_object, remove_object,
     },
     fs_constants::*,
-    inode::{Inode, InodeType},
-    user,
+    inode::{Inode, InodeIdType, InodeType},
+    user::{self, UserIdType},
 };
 
 #[allow(unused)]
@@ -26,7 +26,7 @@ pub struct DirEntry {
     filename: [u8; NAME_LENGTH_LIMIT],       //文件名：10B
     extension: [u8; EXTENSION_LENGTH_LIMIT], //扩展名: 3B
     pub is_dir: bool,                        //目录标志：1B
-    pub inode_id: u16,                       //inode号: 2B
+    pub inode_id: InodeIdType,               //inode号: 2B
 }
 
 impl PartialEq for DirEntry {
@@ -47,7 +47,12 @@ impl Hash for DirEntry {
 #[allow(unused)]
 impl DirEntry {
     /// 在给定inode下生成一个子目录，
-    fn new(filename: &str, extension: &str, is_dir: bool, inode_id: u16) -> Result<Self, Error> {
+    fn new(
+        filename: &str,
+        extension: &str,
+        is_dir: bool,
+        inode_id: InodeIdType,
+    ) -> Result<Self, Error> {
         if filename.len() > NAME_LENGTH_LIMIT {
             error!("filename TOO LONG");
             Err(Error::new(ErrorKind::InvalidInput, "filename TOO LONG"))
@@ -252,8 +257,8 @@ impl DirEntry {
 pub async fn make_directory(
     name: &str,
     parent_inode: &mut Inode,
-    gid: u16,
-    uid: u16,
+    gid: UserIdType,
+    uid: UserIdType,
 ) -> Result<(), Error> {
     if is_special_dir(name) {
         return Err(Error::new(
@@ -289,7 +294,7 @@ pub async fn remove_directory(
     name: &str,
     parent_inode: &mut Inode,
     socket: &mut TcpStream,
-    gid: u16,
+    gid: UserIdType,
 ) -> Result<(), Error> {
     if is_special_dir(name) {
         return Err(Error::new(

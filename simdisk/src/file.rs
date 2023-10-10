@@ -10,7 +10,7 @@ use crate::{
     dirent::{self, DirEntry},
     fs_constants::*,
     inode::{FileMode, Inode, InodeType},
-    user,
+    user::{self, UserIdType},
 };
 
 /// 创建文件，存在同名文件时err
@@ -21,7 +21,7 @@ pub async fn create_file(
     is_copy: bool,
     content: &str,
     socket: &mut TcpStream,
-    user_id: (u16, u16),
+    user_id: (UserIdType, UserIdType),
 ) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
@@ -81,7 +81,11 @@ pub async fn create_file(
 }
 
 /// 删除文件，不存在时err
-pub async fn remove_file(name: &str, parent_inode: &mut Inode, gid: u16) -> Result<(), Error> {
+pub async fn remove_file(
+    name: &str,
+    parent_inode: &mut Inode,
+    gid: UserIdType,
+) -> Result<(), Error> {
     let (filename, extension) = dirent::split_name(name);
     // 查找重名文件
     let mut dirent = DirEntry::new_temp(filename, extension, false)?;

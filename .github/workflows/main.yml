@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v0.1.0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+
+      - name: Build and Release Shell
+        id: build_release_shell
+        run: |
+          cd shell
+          cargo build --release
+
+          # 创建发布
+          export SHELL_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name=="shell") | .version')
+          echo "Shell version: $SHELL_VERSION"
+
+          # 创建发布并上传二进制文件
+          gh release create "v$SHELL_VERSION" ./target/release/shell --title "Shell $SHELL_VERSION" --notes ""
+
+      - name: Build and Release Simdisk
+        id: build_release_simdisk
+        run: |
+          cd simdisk
+          cargo build --release
+
+          # 创建发布
+          export SIMDISK_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name=="simdisk") | .version')
+          echo "Simdisk version: $SIMDISK_VERSION"
+
+          # 创建发布并上传二进制文件
+          gh release create "v$SIMDISK_VERSION" ./target/release/simdisk --title "Simdisk $SIMDISK_VERSION" --notes ""

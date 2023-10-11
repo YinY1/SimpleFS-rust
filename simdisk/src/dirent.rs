@@ -263,7 +263,7 @@ pub async fn make_directory(
     if is_special_dir(name) {
         return Err(Error::new(
             ErrorKind::PermissionDenied,
-            "cannot make such diretory",
+            "cannot make special diretory",
         ));
     }
     // 生成一个名为name的dirent存在父节点的block中
@@ -299,7 +299,7 @@ pub async fn remove_directory(
     if is_special_dir(name) {
         return Err(Error::new(
             ErrorKind::PermissionDenied,
-            "cannot make such diretory",
+            "cannot remove special diretory",
         ));
     }
     let (filename, ext) = split_name(name);
@@ -309,6 +309,10 @@ pub async fn remove_directory(
         // 判断目录是否非空
         Ok((level, block_id)) => {
             //找到了同名目录项
+            if !dirent.is_dir {
+                // 不是目录，不能删除
+                return Err(Error::new(ErrorKind::PermissionDenied, "cannot rd a file"));
+            }
             let mut dir_inode = Inode::read(dirent.inode_id as usize).await?;
             // 不能越权
             if !user::able_to_modify(gid, dir_inode.gid) {

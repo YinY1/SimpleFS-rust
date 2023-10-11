@@ -73,8 +73,31 @@ jobs:
         name: ${{ matrix.project }}.app
         path: ${{ matrix.project }}/target/x86_64-apple-darwin/release/${{ matrix.project }}.app
 
+  build-mac-arm:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        project: [shell, simdisk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Arm MacOS Target ${{ matrix.project }}
+      run: |
+        cd ${{ matrix.project }}
+        cargo build --release --target aarch64-apple-darwin
+        mv target/aarch64-apple-darwin/release/${{ matrix.project }} target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+
+    - name: Upload Arm MacOS ${{ matrix.project }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.project }}_arm64.app
+        path: ${{ matrix.project }}/target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+
+        
   release:
-    needs: [build-linux, build-windows, build-mac]
+    needs: [build-linux, build-windows, build-mac, build-mac-arm]
     runs-on: ubuntu-latest
 
     steps:
@@ -115,6 +138,18 @@ jobs:
         with:
           name: simdisk.app
           path: bin/macos
+
+      - name: Download ARM MacOS Shell
+        uses: actions/download-artifact@v3
+        with:
+          name: shell_arm64.app
+          path: bin/macos_arm64
+
+      - name: Download ARM MacOS Simdisk
+        uses: actions/download-artifact@v3
+        with:
+          name: simdisk_arm64.app
+          path: bin/macos_arm64
       
       - name: Archive Linux Binaries
         run: zip -j SimpleFS_x86_64-linux.zip bin/linux/shell bin/linux/simdisk
@@ -125,6 +160,9 @@ jobs:
       - name: Archive MacOS Binaries
         run: zip -j SimpleFS_x86_64-apple.zip bin/macos/shell.app bin/macos/simdisk.app
 
+      - name: Archive ARM MacOS Binaries
+        run: zip -j SimpleFS_aarch64-apple.zip bin/macos_arm64/shell_arm64.app bin/macos_arm64/simdisk_arm64.app
+
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -133,3 +171,4 @@ jobs:
             SimpleFS_x86_64-linux.zip
             SimpleFS_x86_64-windows.zip
             SimpleFS_x86_64-apple.zip
+            SimpleFS_aarch64-apple.zip

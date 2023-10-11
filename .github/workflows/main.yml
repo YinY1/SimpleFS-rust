@@ -85,6 +85,7 @@ jobs:
 
     - name: Build Arm MacOS Target ${{ matrix.project }}
       run: |
+        rustup target add aarch64-apple-darwin
         cd ${{ matrix.project }}
         cargo build --release --target aarch64-apple-darwin
         mv target/aarch64-apple-darwin/release/${{ matrix.project }} target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app

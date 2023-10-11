@@ -1,0 +1,135 @@
+name: Build and Release Rust Projects
+
+on: 
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        project: [shell, simdisk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Linux Target ${{ matrix.project }}
+      run: |
+        cd ${{ matrix.project }}
+        cargo build --release --target x86_64-unknown-linux-gnu
+
+    - name: Upload Linux ${{ matrix.project }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.project }}
+        path: ${{ matrix.project }}/target/x86_64-unknown-linux-gnu/release/${{ matrix.project }}
+
+  build-windows:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        project: [shell, simdisk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Windows Target ${{ matrix.project }}
+      run: |
+        cd ${{ matrix.project }}
+        cargo build --release --target x86_64-pc-windows-gnu
+
+    - name: Upload Windows ${{ matrix.project }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.project }}.exe
+        path: ${{ matrix.project }}/target/x86_64-pc-windows-gnu/release/${{ matrix.project }}.exe
+
+  build-mac:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        project: [shell, simdisk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build MacOS Target ${{ matrix.project }}
+      run: |
+        cd ${{ matrix.project }}
+        cargo build --release --target x86_64-apple-darwin
+        mv target/x86_64-apple-darwin/release/${{ matrix.project }} target/x86_64-apple-darwin/release/${{ matrix.project }}.app
+
+    - name: Upload MacOS ${{ matrix.project }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.project }}.app
+        path: ${{ matrix.project }}/target/x86_64-apple-darwin/release/${{ matrix.project }}.app
+
+  release:
+    needs: [build-linux, build-windows, build-mac]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+  
+      - name: Download Linux Shell
+        uses: actions/download-artifact@v3
+        with:
+          name: shell
+          path: bin/linux
+
+      - name: Download Linux Simdisk
+        uses: actions/download-artifact@v3
+        with:
+          name: simdisk
+          path: bin/linux
+  
+      - name: Download Windows Shell
+        uses: actions/download-artifact@v3
+        with:
+          name: shell.exe
+          path: bin/windows
+
+      - name: Download Windows Simdisk
+        uses: actions/download-artifact@v3
+        with:
+          name: simdisk.exe
+          path: bin/windows
+
+      - name: Download MacOS Shell
+        uses: actions/download-artifact@v3
+        with:
+          name: shell.app
+          path: bin/macos
+
+      - name: Download MacOS Simdisk
+        uses: actions/download-artifact@v3
+        with:
+          name: simdisk.app
+          path: bin/macos
+      
+      - name: Archive Linux Binaries
+        run: zip -j SimpleFS_x86_64-linux.zip bin/linux/shell bin/linux/simdisk
+
+      - name: Archive Windows Binaries
+        run: zip -j SimpleFS_x86_64-windows.zip bin/windows/shell.exe bin/windows/simdisk.exe
+
+      - name: Archive MacOS Binaries
+        run: zip -j SimpleFS_x86_64-apple.zip bin/macos/shell.app bin/macos/simdisk.app
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            SimpleFS_x86_64-linux.zip
+            SimpleFS_x86_64-windows.zip
+            SimpleFS_x86_64-apple.zip

@@ -2,11 +2,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Error, ErrorKind},
+    io::{Error, ErrorKind, Read, Seek},
     mem::size_of,
-    os::unix::prelude::FileExt,
     sync::Arc,
-    usize,
 };
 use tokio::{
     io::{AsyncSeekExt, AsyncWriteExt},
@@ -115,7 +113,8 @@ pub async fn read_blocks_to_cache(block_id_addrs: &[usize]) -> Result<(), Error>
 
         let offset = block_id * BLOCK_SIZE;
         if let Some(file) = &mut file {
-            if file.read_exact_at(&mut block.bytes, offset as u64).is_err() {
+            file.seek(std::io::SeekFrom::Start(offset as u64))?;
+            if file.read_exact(&mut block.bytes).is_err() {
                 let e = format!("cannot read buffer at {}", offset);
                 error!("{}", e);
                 return Err(Error::new(ErrorKind::AddrNotAvailable, e));

@@ -629,13 +629,10 @@ pub async fn check_data_and_fix() -> Result<(), Error> {
     let data_bitmap = bitmap::get_data_bitmaps().await;
     for (i, byte) in data_bitmap.iter().enumerate() {
         for j in 0..8 {
-            let mask = 0b10000000 >> j;
-            let bit_id = i * 8 + j;
-            if bit_id >= DATA_BLOCK_MAX_NUM {
-                return Ok(());
-            }
-            let block_id = bit_id + DATA_START_BLOCK;
-            if byte & mask == 1 {
+            // 如果该位为1
+            if byte.get(j) {
+                let bit_id = i * 8 + j;
+                let block_id = bit_id + DATA_START_BLOCK;
                 // 检查对应区域是否为空，为空则置0
                 let block = get_block_buffer(block_id, 0, BLOCK_SIZE).await?;
                 if block.is_empty() {

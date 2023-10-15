@@ -108,10 +108,10 @@ pub async fn remove_file(
                     "Insufficient user permissions",
                 ));
             }
+            // 释放inode
+            inode.dealloc().await;
             // 删除目录项
             remove_object(&dirent, block_id as usize, level, parent_inode).await?;
-            // 释放inode // TODO 还能优化
-            inode.dealloc().await;
             Ok(())
         }
     }

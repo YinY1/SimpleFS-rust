@@ -377,8 +377,8 @@ pub async fn check_inodes_and_fix() -> Result<(), Error> {
     let inode_bitmap = bitmap::get_inode_bitmaps().await;
     for (i, byte) in inode_bitmap.iter().enumerate() {
         for j in 0..8 {
-            let mask = 0b10000000 >> j;
-            if byte & mask == 1 {
+            // 如果该位位1
+            if byte.get(j) {
                 // 检查对应区域是否为空，为空则置0
                 let id = i * 8 + j;
                 let inode = Inode::read(id).await?;

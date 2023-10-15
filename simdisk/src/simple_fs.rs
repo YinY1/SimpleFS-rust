@@ -8,12 +8,12 @@ use std::{
 use tokio::sync::RwLock;
 
 use crate::{
-    bitmap::{count_data_blocks, count_inodes},
+    bitmap::{count_data_blocks, count_inodes, BITMAP_MANAGER},
     block::{self, BLOCK_CACHE_MANAGER},
     fs_constants::*,
     inode::{self, Inode},
     super_block::SuperBlock,
-    user::{User, UserIdGroup, UserInfo, UserIdType},
+    user::{User, UserIdGroup, UserIdType, UserInfo},
 };
 
 #[allow(unused)]
@@ -43,6 +43,13 @@ impl SimpleFileSystem {
         let sp = SuperBlock::read().await?;
         if sp.valid() {
             self.read().await;
+            // 读入位图缓存
+            Arc::clone(&BITMAP_MANAGER)
+                .write()
+                .await
+                .read()
+                .await
+                .unwrap();
             trace!("no need to init fs");
             return Ok(());
         }
@@ -51,7 +58,7 @@ impl SimpleFileSystem {
 
     /// 打印文件系统的信息
     pub async fn info(&self) -> String {
-        let (fs_size, fs_unit) = show_unit(FS_SIZE);
+        let (fs_size, fs_unit) = show_unit(DATA_BLOCK_MAX_NUM * BLOCK_SIZE);
         let (alloced_inodes, valid_inodes) = count_inodes().await;
         let (alloced, valid) = count_data_blocks().await;
         let (used_size, used_unit) = show_unit(alloced * BLOCK_SIZE);
@@ -84,6 +91,14 @@ impl SimpleFileSystem {
         // 单纯清空缓存，不写入本地文件，用于格式化
         let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
         blk.write().await.block_cache.clear();
+
+        // 读入位图缓存
+        Arc::clone(&BITMAP_MANAGER)
+            .write()
+            .await
+            .read()
+            .await
+            .unwrap();
 
         // 创建超级块
         SuperBlock::init().await;

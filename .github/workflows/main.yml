@@ -73,63 +73,80 @@ jobs:
         name: ${{ matrix.project }}.app
         path: ${{ matrix.project }}/target/x86_64-apple-darwin/release/${{ matrix.project }}.app
 
+  build-mac-arm:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        project: [shell, simdisk]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build ARM MacOS Target ${{ matrix.project }}
+      run: |
+        rustup target add aarch64-apple-darwin
+        cd ${{ matrix.project }}
+        cargo build --release --target aarch64-apple-darwin
+        mv target/aarch64-apple-darwin/release/${{ matrix.project }} target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+
+    - name: Upload Arm MacOS ${{ matrix.project }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.project }}_arm64.app
+        path: ${{ matrix.project }}/target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+
+        
   release:
-    needs: [build-linux, build-windows, build-mac]
+    needs: [build-linux, build-windows, build-mac, build-mac-arm]
     runs-on: ubuntu-latest
+
+    env: 
+      VERSION: ${{ github.ref_name }}
 
     steps:
       - uses: actions/checkout@v3
-  
-      - name: Download Linux Shell
-        uses: actions/download-artifact@v3
-        with:
-          name: shell
-          path: bin/linux
-
-      - name: Download Linux Simdisk
-        uses: actions/download-artifact@v3
-        with:
-          name: simdisk
-          path: bin/linux
-  
-      - name: Download Windows Shell
-        uses: actions/download-artifact@v3
-        with:
-          name: shell.exe
-          path: bin/windows
-
-      - name: Download Windows Simdisk
-        uses: actions/download-artifact@v3
-        with:
-          name: simdisk.exe
-          path: bin/windows
-
-      - name: Download MacOS Shell
-        uses: actions/download-artifact@v3
-        with:
-          name: shell.app
-          path: bin/macos
-
-      - name: Download MacOS Simdisk
-        uses: actions/download-artifact@v3
-        with:
-          name: simdisk.app
-          path: bin/macos
       
+      - uses: actions/download-artifact@v3
+        with:
+          path: bins
+
+      - name: Add permissions to files
+        run: |
+          find bins -type f -exec chmod +x {} \;
+
+      - name : Upx archive
+        run: |
+          sudo apt install -y upx
+          find bins -type f -exec upx "{}" --best \;
+
       - name: Archive Linux Binaries
-        run: zip -j SimpleFS_x86_64-linux.zip bin/linux/shell bin/linux/simdisk
+        run: |
+          zip -j $FILENAME bins/shell/shell bins/simdisk/simdisk
+        env:
+          FILENAME: SimpleFS_x86_64-linux_${{env.VERSION}}.zip
 
       - name: Archive Windows Binaries
-        run: zip -j SimpleFS_x86_64-windows.zip bin/windows/shell.exe bin/windows/simdisk.exe
+        run: |
+          zip -j $FILENAME bins/shell.exe/shell.exe bins/simdisk.exe/simdisk.exe
+        env:
+          FILENAME: SimpleFS_x86_64-windows_${{env.VERSION}}.zip
 
       - name: Archive MacOS Binaries
-        run: zip -j SimpleFS_x86_64-apple.zip bin/macos/shell.app bin/macos/simdisk.app
+        run: |
+          zip -j $FILENAME bins/shell.app/shell.app bins/simdisk.app/simdisk.app
+        env:
+          FILENAME: SimpleFS_x86_64--apple_${{env.VERSION}}.zip
+
+      - name: Archive ARM MacOS Binaries
+        run: |
+          zip -j $FILENAME bins/shell_arm64.app/shell_arm64.app bins/simdisk_arm64.app/simdisk_arm64.app
+        env:
+          FILENAME: SimpleFS_aarch64-apple_${{env.VERSION}}.zip
 
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            SimpleFS_x86_64-linux.zip
-            SimpleFS_x86_64-windows.zip
-            SimpleFS_x86_64-apple.zip
+            *.zip

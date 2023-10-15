@@ -1,68 +1,146 @@
 use std::{
-    io::{Error, ErrorKind},
+    io::{self, Error, ErrorKind},
     sync::Arc,
 };
 
+use tokio::sync::RwLock;
+
 use crate::{
     block::{
-        clear_blocks, get_block_buffer, read_block_to_cache, read_blocks_to_cache,
+        clear_blocks, get_blocks_buffers, read_block_to_cache, read_blocks_to_cache,
         BLOCK_CACHE_MANAGER,
     },
     fs_constants::*,
 };
 
+type BitmapDataType = bitmaps::Bitmap<8>;
+
+#[derive(Default)]
+pub struct BitmapManager {
+    inodes: Vec<BitmapDataType>, // 以字节为单位存储inode位图缓存
+    datas: Vec<BitmapDataType>,  // 以字节为单位存储data位图缓存
+    last_inode_byte_pos: usize,  // 最后一次alloc inode bit所在的byte的位置
+    last_data_byte_pos: usize,   // 最后一次alloc data bit所在的byte的位置
+}
+
+impl BitmapManager {
+    pub async fn read(&mut self) -> io::Result<()> {
+        // 读入位图区快
+        let range = INODE_BITMAP_START_BLOCK..DATA_BITMAP_START_BLOCK + DATA_BITMAP_NUM;
+        let mut block_args = Vec::new();
+        for block_id in range {
+            block_args.push((block_id, 0, BLOCK_SIZE));
+        }
+        let buffers = get_blocks_buffers(&block_args).await?;
+
+        // 读入inode位图
+        let mut inodes = Vec::new();
+        for block_buffer in &buffers[..INODE_BITMAP_NUM] {
+            for byte in block_buffer {
+                let bitmap: BitmapDataType = bitmaps::Bitmap::from_value(*byte);
+                inodes.push(bitmap);
+            }
+        }
+
+        // 读入data位图
+        let mut datas = Vec::new();
+        for block_buffer in &buffers[INODE_BITMAP_NUM..] {
+            for byte in block_buffer {
+                let bitmap: BitmapDataType = bitmaps::Bitmap::from_value(*byte);
+                datas.push(bitmap);
+            }
+        }
+
+        *self = Self {
+            inodes,
+            datas,
+            last_inode_byte_pos: 0,
+            last_data_byte_pos: 0,
+        };
+
+        Ok(())
+    }
+
+    /// 返回(bit_id, byte_pos, byte_value)
+    fn alloc_bit(&mut self, bitmap_type: BitmapType) -> io::Result<(u32, usize, u8)> {
+        let (bitmap, prev_byte_pos) = match bitmap_type {
+            BitmapType::Inode => (&mut self.inodes, &mut self.last_inode_byte_pos),
+            BitmapType::Data => (&mut self.datas, &mut self.last_data_byte_pos),
+        };
+
+        let mut cur_byte_pos = *prev_byte_pos;
+        loop {
+            let byte = &mut bitmap[cur_byte_pos];
+            // 如果找到了非全满的byte
+            if let Some(bit_pos) = byte.first_false_index() {
+                let id = cur_byte_pos * 8 + bit_pos;
+                byte.set(bit_pos, true); // 设置为已占用
+                *prev_byte_pos = cur_byte_pos; // 更新位置
+                return Ok((id as u32, cur_byte_pos, byte.into_value()));
+            }
+
+            cur_byte_pos = (cur_byte_pos + 1) % bitmap.len();
+            if cur_byte_pos == *prev_byte_pos {
+                // 回到了同一个位置还没找到
+                break;
+            }
+        }
+        Err(Error::new(ErrorKind::OutOfMemory, "no valid bit"))
+    }
+
+    // 返回false如果bit本身已经是0
+    fn dealloc_bit(&mut self, bitmap_type: BitmapType, bit_id: usize) -> bool {
+        let bitmap = match bitmap_type {
+            BitmapType::Inode => &mut self.inodes,
+            BitmapType::Data => &mut self.datas,
+        };
+
+        let byte_pos = bit_id / 8;
+        let bit_pos = bit_id % 8;
+        // 因为set返回的是之前的bit值而不是有没有设置成功，所以返回true代表原来是1，可以dealloc
+        bitmap[byte_pos].set(bit_pos, false)
+    }
+}
+
 /// 获取一个空闲bit的位置，如果有，则bit置1并返回位置
 /// 这个位置是从当前所属位图开始计算，即当前所属位图的第K个bit
 pub async fn alloc_bit(bitmap_type: BitmapType) -> Result<u32, Error> {
-    let (block_nums, block_start_id) = match bitmap_type {
-        BitmapType::Inode => (INODE_BITMAP_NUM, INODE_BITMAP_START_BLOCK),
-        BitmapType::Data => (DATA_BITMAP_NUM, DATA_BITMAP_START_BLOCK),
+    let block_start_id = match bitmap_type {
+        BitmapType::Inode => INODE_BITMAP_START_BLOCK,
+        BitmapType::Data => DATA_BITMAP_START_BLOCK,
     };
 
-    // 遍历位图的每个块
-    for n in 0..block_nums {
-        // 计算当前所在的块的id（起始id是super的0）
-        let block_id = block_start_id + n;
-        read_block_to_cache(block_id).await?;
+    let (bit_id, byte_pos, byte_value) = Arc::clone(&BITMAP_MANAGER)
+        .write()
+        .await
+        .alloc_bit(bitmap_type)?;
 
-        let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-        let mut bcm = blk.write().await;
-        let block = bcm.block_cache.get_mut(&block_id).unwrap();
+    // 取得对应位置block的可变引用
+    let block_id = block_start_id + byte_pos / BLOCK_SIZE;
+    read_block_to_cache(block_id).await?;
+    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut bcm = blk.write().await;
+    let block = bcm.block_cache.get_mut(&block_id).unwrap();
 
-        // 遍历当前块的每个byte, i [0,BLOCK_SIZE)
-        for (i, byte) in block.bytes.iter_mut().enumerate() {
-            if *byte == 0b11111111 {
-                continue;
-            }
-            // 从高位到低位遍历当前byte的每个bit（从左到右）
-            for j in 0..8 {
-                let mask = 0b10000000 >> j;
-                let bit = *byte & mask;
-                if bit == 0 {
-                    // 找到空闲bit
-                    let id = ((n * BLOCK_SIZE + i) * 8 + j) as u32;
-                    if let BitmapType::Data = bitmap_type {
-                        if id as usize >= DATA_BLOCK_MAX_NUM {
-                            // 块id虽然能在位图中表示，但是超出了数据区块的数目
-                            let err =
-                                format!("block id {} out of limit {}", id, DATA_BLOCK_MAX_NUM);
-                            return Err(Error::new(ErrorKind::OutOfMemory, err));
-                        }
-                    }
-                    block.modify_bytes(|bytes_arr| bytes_arr[i] |= mask);
-                    trace!("alloc id {} for a {:?}", id, bitmap_type);
-                    return Ok(id);
-                }
-            }
-        }
-    }
-    // 没有空余位图了
-    Err(Error::new(ErrorKind::OutOfMemory, "no valid bit"))
+    // 将更新后的value写入block缓存中
+    block.modify_bytes(|bytes| bytes[byte_pos % BLOCK_SIZE] = byte_value);
+
+    trace!("alloc id {} for a {:?}", bit_id, bitmap_type);
+    Ok(bit_id)
 }
 
 /// 在inode位图中dealloc对应的bit
 pub async fn dealloc_inode_bit(inode_id: usize) -> bool {
-    dealloc_bit(INODE_BITMAP_START_BLOCK, inode_id / 8, inode_id).await
+    let succees = Arc::clone(&BITMAP_MANAGER)
+        .write()
+        .await
+        .dealloc_bit(BitmapType::Inode, inode_id);
+    if !succees {
+        return false; // 试图重复dealloc
+    }
+    // 再去disk中dealloc bit
+    dealloc_bit_in_disk(INODE_BITMAP_START_BLOCK, inode_id / 8, inode_id).await;
+    true
 }
 
 /// 在对应的位图中dealloc 指定block所占用的bit, 同时清空该block
@@ -72,83 +150,75 @@ pub async fn dealloc_data_bit(block_id: usize) {
 
 /// 批量清除data block并dealloc
 pub async fn dealloc_data_bits(block_ids: &[usize]) {
+    // 取得bitmap manager的可变引用
+    let bitmap_manager = Arc::clone(&BITMAP_MANAGER);
+    let mut bitmap_write_lock = bitmap_manager.write().await;
+
     let mut bit_args = Vec::new();
-    for block_id in block_ids {
-        bit_args.push(cal_bit_args(*block_id));
-    }
-    let answers = dealloc_bits(&bit_args).await;
     let mut block_to_clear = Vec::new();
-    for (i, ans) in answers.iter().enumerate() {
-        if *ans {
-            block_to_clear.push(block_ids[i]);
+    for block_id in block_ids {
+        // 在位图缓存中试图dealloc这个block
+        let bit_id = block_id - DATA_START_BLOCK;
+        let success = bitmap_write_lock.dealloc_bit(BitmapType::Data, bit_id);
+        if success {
+            // 如果位图中成功dealloc，则准备dealloc磁盘中的bit
+            bit_args.push(cal_data_bit_args(*block_id));
+            // 同时准备清空该磁盘块内容
+            block_to_clear.push(*block_id);
         }
     }
+    dealloc_bits_in_disk(&bit_args).await;
     clear_blocks(&block_to_clear).await.unwrap();
 }
 
-async fn dealloc_bit(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) -> bool {
-    let ans = dealloc_bits(&[(bitmap_block_id, inner_byte_pos, bit_pos)]).await;
-    ans[0]
+async fn dealloc_bit_in_disk(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) {
+    dealloc_bits_in_disk(&[(bitmap_block_id, inner_byte_pos, bit_pos)]).await;
 }
 
-async fn dealloc_bits(bit_args: &[(usize, usize, usize)]) -> Vec<bool> {
+/// 假设已经在缓存中成功dealloc了bit
+async fn dealloc_bits_in_disk(bit_args: &[(usize, usize, usize)]) {
     let ids: Vec<_> = bit_args
         .iter()
         .map(|(bitmap_block_id, _, _)| *bitmap_block_id)
         .collect();
     read_blocks_to_cache(&ids).await.unwrap();
+
+    // 取得block cache manager的可变引用
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
 
-    let mut ans = Vec::new();
     for (bitmap_block_id, inner_byte_pos, bit_pos) in bit_args {
         let block = bcm.block_cache.get_mut(bitmap_block_id).unwrap();
-        let byte = &mut block.bytes[*inner_byte_pos];
-        // 从左到右的掩码（而不是从右到左，因为pos是从左开始计算的）
-        let mask = 0b10000000 >> bit_pos;
-        if (*byte & mask) != 0 {
-            // 将该bit置0表示空闲
-            block.modify_bytes(|bytes_arr| bytes_arr[*inner_byte_pos] &= !mask);
-            ans.push(true);
-        } else {
-            ans.push(false)
-        }
+        // 从低位到高位的掩码
+        let mask = 1 << bit_pos;
+        block.modify_bytes(|bytes_arr| bytes_arr[*inner_byte_pos] &= !mask);
     }
-    ans
 }
 
 async fn count_bits(bitmap_type: BitmapType) -> usize {
-    let (start_id, block_nums) = match bitmap_type {
-        BitmapType::Inode => (INODE_BITMAP_START_BLOCK, INODE_BITMAP_NUM),
-        BitmapType::Data => (DATA_BITMAP_START_BLOCK, DATA_BITMAP_NUM),
+    //读取缓存
+    let bitmap_manager = Arc::clone(&BITMAP_MANAGER);
+    let read_lock = bitmap_manager.read().await;
+    let bitmap = match bitmap_type {
+        BitmapType::Inode => &read_lock.inodes,
+        BitmapType::Data => &read_lock.datas,
     };
-    let mut cnt = 0;
-    for i in 0..block_nums {
-        let block_id = start_id + i;
-        let bm = get_block_buffer(block_id, 0, BLOCK_SIZE).await.unwrap();
-        cnt += bm
-            .iter()
-            .map(|byte| byte.count_ones() as usize)
-            .sum::<usize>()
-    }
-    cnt
+    bitmap.iter().map(|byte| byte.len()).sum()
 }
 
-async fn get_bitmaps(bitmap_type: BitmapType) -> Vec<u8> {
-    let (start_id, block_nums) = match bitmap_type {
-        BitmapType::Inode => (INODE_BITMAP_START_BLOCK, INODE_BITMAP_NUM),
-        BitmapType::Data => (DATA_BITMAP_START_BLOCK, DATA_BITMAP_NUM),
+async fn get_bitmaps(bitmap_type: BitmapType) -> Vec<BitmapDataType> {
+    //读取缓存
+    let bitmap_manager = Arc::clone(&BITMAP_MANAGER);
+    let read_lock = bitmap_manager.read().await;
+    let bitmap = match bitmap_type {
+        BitmapType::Inode => &read_lock.inodes,
+        BitmapType::Data => &read_lock.datas,
     };
-    let mut bitmaps = Vec::new();
-    for i in 0..block_nums {
-        let block_id = start_id + i;
-        let mut bm = get_block_buffer(block_id, 0, BLOCK_SIZE).await.unwrap();
-        bitmaps.append(&mut bm)
-    }
-    bitmaps
+    bitmap.clone()
 }
 
-fn cal_bit_args(block_id: usize) -> (usize, usize, usize) {
+/// 由给定的block id算出在data bitmap中对应的(bitmap_block_id, inner_byte_pos, bit_pos)
+fn cal_data_bit_args(block_id: usize) -> (usize, usize, usize) {
     let (bit_block_start_id, block_start_id) = (DATA_BITMAP_START_BLOCK, DATA_START_BLOCK);
     //对应位图（包括所有的块）中的总共第K个bit（从左到右）
     let bit_id = block_id - block_start_id;
@@ -163,35 +233,26 @@ fn cal_bit_args(block_id: usize) -> (usize, usize, usize) {
     (bitmap_block_id, inner_byte_pos, bit_pos)
 }
 
-pub async fn get_inode_bitmaps() -> Vec<u8> {
+pub async fn get_inode_bitmaps() -> Vec<BitmapDataType> {
     get_bitmaps(BitmapType::Inode).await
 }
 
-pub async fn get_data_bitmaps() -> Vec<u8> {
+pub async fn get_data_bitmaps() -> Vec<BitmapDataType> {
     get_bitmaps(BitmapType::Data).await
 }
 
-#[allow(unused)]
 /// 统计申请了多少inode,第一个返回值为已申请，第二个返回值为未申请
 pub async fn count_inodes() -> (usize, usize) {
     let alloced = count_bits(BitmapType::Inode).await;
     (alloced, INODE_MAX_NUM - alloced)
 }
 
-#[allow(unused)]
 /// 统计申请了多少数据块,第一个返回值为已申请，第二个返回值为未申请
 pub async fn count_data_blocks() -> (usize, usize) {
     let alloced = count_bits(BitmapType::Data).await;
     (alloced, DATA_BLOCK_MAX_NUM - alloced)
 }
 
-#[allow(unused)]
-/// 统计空闲inode数
-pub async fn count_valid_inodes() -> usize {
-    1024 - count_bits(BitmapType::Inode).await
-}
-
-#[allow(unused)]
 /// 统计空闲data block数
 pub async fn count_valid_data_blocks() -> usize {
     DATA_BLOCK_MAX_NUM - count_bits(BitmapType::Data).await
@@ -201,4 +262,10 @@ pub async fn count_valid_data_blocks() -> usize {
 pub enum BitmapType {
     Inode,
     Data,
+}
+
+//延迟加载全局变量 BITMAP_MANAGER
+lazy_static! {
+    pub static ref BITMAP_MANAGER: Arc<RwLock<BitmapManager>> =
+        Arc::new(RwLock::new(BitmapManager::default()));
 }

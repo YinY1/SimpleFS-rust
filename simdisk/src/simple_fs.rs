@@ -1,10 +1,6 @@
 #[allow(unused)]
 use log::{debug, error, info, trace};
-use std::{
-    fs::File,
-    io::{Error, Write},
-    sync::Arc,
-};
+use std::{fs::File, io::Error, sync::Arc};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -168,7 +164,7 @@ pub async fn check_bitmaps_and_fix() -> Result<(), Error> {
 
 /// 创建100MB空文件
 pub fn create_fs_file() -> Result<(), Error> {
-    File::create(FS_FILE_NAME)?.write_all(&[0u8; FS_SIZE])
+    File::create(FS_FILE_NAME)?.set_len(FS_SIZE as u64)
 }
 
 //延迟加载全局变量 SFS

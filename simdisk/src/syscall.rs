@@ -21,7 +21,8 @@ pub async fn info() -> io::Result<Option<String>> {
 
 /// 展示目录信息
 pub async fn ls(username: &str, path: &str, detail: bool) -> io::Result<Option<String>> {
-    let infos = temp_cd_and_do(&[path, "/"].concat(), false, |_, current_inode| {
+    let absolute_path = [path, "/"].concat();
+    let infos = temp_cd_and_do(&absolute_path, false, |_, current_inode| {
         Box::pin(async move { Ok(Some(current_inode.ls(username, detail).await)) })
     })
     .await?;

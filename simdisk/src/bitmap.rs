@@ -145,7 +145,8 @@ pub async fn dealloc_inode_bit(inode_id: usize) -> bool {
 
 /// 在对应的位图中dealloc 指定block所占用的bit, 同时清空该block
 pub async fn dealloc_data_bit(block_id: usize) {
-    dealloc_data_bits(&[block_id]).await;
+    let id = [block_id];
+    dealloc_data_bits(&id).await;
 }
 
 /// 批量清除data block并dealloc
@@ -172,7 +173,8 @@ pub async fn dealloc_data_bits(block_ids: &[usize]) {
 }
 
 async fn dealloc_bit_in_disk(bitmap_block_id: usize, inner_byte_pos: usize, bit_pos: usize) {
-    dealloc_bits_in_disk(&[(bitmap_block_id, inner_byte_pos, bit_pos)]).await;
+    let arg = [(bitmap_block_id, inner_byte_pos, bit_pos)];
+    dealloc_bits_in_disk(&arg).await;
 }
 
 /// 假设已经在缓存中成功dealloc了bit

@@ -394,7 +394,8 @@ pub async fn check_inodes_and_fix() -> Result<(), Error> {
 
 /// dealloc 一级块以及其拥有的直接块
 async fn dealloc_first_blocks(first_id: usize) {
-    dealloc_first_arr_blocks(&[first_id]).await;
+    let id = [first_id];
+    dealloc_first_arr_blocks(&id).await;
 }
 
 async fn dealloc_first_arr_blocks(first_ids: &[usize]) {

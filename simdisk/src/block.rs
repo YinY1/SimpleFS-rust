@@ -87,7 +87,8 @@ impl BlockCacheManager {
 
 /// 将块读入缓存中
 pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
-    read_blocks_to_cache(&[block_id]).await
+    let id = [block_id];
+    read_blocks_to_cache(&id).await
 }
 
 /// 批量将块读入缓存中
@@ -132,7 +133,8 @@ pub async fn get_block_buffer(
     start_byte: usize,
     end_byte: usize,
 ) -> Result<Vec<u8>, Error> {
-    let buffers = get_blocks_buffers(&[(block_id, start_byte, end_byte)]).await?;
+    let arg = [(block_id, start_byte, end_byte)];
+    let buffers = get_blocks_buffers(&arg).await?;
     Ok(buffers[0].clone())
 }
 
@@ -189,7 +191,8 @@ pub async fn write_block<T: serde::Serialize>(
     block_id: usize,
     start_byte: usize,
 ) -> Result<(), Error> {
-    write_blocks(&[(object, block_id, start_byte)]).await
+    let arg = [(object, block_id, start_byte)];
+    write_blocks(&arg).await
 }
 
 /// 批量将object写入块中， args为（object，block_id, start_byte）数组
@@ -352,7 +355,8 @@ async fn get_direct_blocks(id: &[BlockIDType]) -> Result<Vec<Vec<u8>>, Error> {
 async fn get_blocks_of_first(
     first_id: BlockIDType,
 ) -> Result<Vec<(BlockLevel, BlockIDType, Vec<u8>)>, Error> {
-    get_block_of_first_arr(&[first_id]).await
+    let id = [first_id];
+    get_block_of_first_arr(&id).await
 }
 
 async fn get_block_of_first_arr(

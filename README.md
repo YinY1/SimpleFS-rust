@@ -108,8 +108,7 @@ pub struct DirEntry {//16B(对齐后)
 
 ### 从源码编译
 
-- 在simdisk/下运行 `cargo run --release`启动后台管理程序，首次使用或者超级块被破坏会执行初始化，创建`SIMPLE_FS`文件作为系统载体
-- 然后在shell/下运行`cargo run --release`打开shell，支持多个shell同时连接simdisk
+- 在根目录下运行`build.py`，会在`bin/`得到编译出来的二进制文件，然后同下
 
 ### 从二进制
 

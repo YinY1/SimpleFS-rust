@@ -1,10 +1,9 @@
 use std::io::{Error, Write};
 
-use shell::*;
+use utils::*;
 use tokio::io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ErrorKind, Stdin};
 use tokio::net::{TcpListener, TcpStream};
 
-extern crate pretty_env_logger;
 #[macro_use]
 extern crate log;
 

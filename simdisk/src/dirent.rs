@@ -325,7 +325,7 @@ pub async fn remove_directory(
             for (_, _, dirent) in dirs {
                 if !dirent.is_special() {
                     // send指令
-                    socket.write_all(shell::COMMAND_CONFIRM.as_bytes()).await?;
+                    socket.write_all(utils::COMMAND_CONFIRM.as_bytes()).await?;
                     // 2.ex2 从client 等待确认指令
                     let mut response = [0; 8];
                     let n = socket.read(&mut response).await?;

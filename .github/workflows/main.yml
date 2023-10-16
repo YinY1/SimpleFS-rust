@@ -12,89 +12,95 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        project: [shell, simdisk]
-
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build Linux Target ${{ matrix.project }}
+    - name: Build Linux Target
       run: |
-        cd ${{ matrix.project }}
         cargo build --release --target x86_64-unknown-linux-gnu
 
-    - name: Upload Linux ${{ matrix.project }}
+    - name: Upload Linux shell
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ matrix.project }}
-        path: ${{ matrix.project }}/target/x86_64-unknown-linux-gnu/release/${{ matrix.project }}
+        name: shell
+        path: target/x86_64-unknown-linux-gnu/release/shell
+
+    - name: Upload Linux simdisk
+      uses: actions/upload-artifact@v3
+      with:
+        name: simdisk
+        path: target/x86_64-unknown-linux-gnu/release/simdisk
 
   build-windows:
     runs-on: windows-latest
 
-    strategy:
-      matrix:
-        project: [shell, simdisk]
-
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build Windows Target ${{ matrix.project }}
+    - name: Build Windows Target
       run: |
-        cd ${{ matrix.project }}
         cargo build --release --target x86_64-pc-windows-gnu
 
-    - name: Upload Windows ${{ matrix.project }}
+    - name: Upload Windows shell
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ matrix.project }}.exe
-        path: ${{ matrix.project }}/target/x86_64-pc-windows-gnu/release/${{ matrix.project }}.exe
+        name: shell.exe
+        path: target/x86_64-pc-windows-gnu/release/shell.exe
+    
+    - name: Upload Windows simdisk
+      uses: actions/upload-artifact@v3
+      with:
+        name: simdisk.exe
+        path: target/x86_64-pc-windows-gnu/release/simdisk.exe
 
   build-mac:
     runs-on: macos-latest
 
-    strategy:
-      matrix:
-        project: [shell, simdisk]
-
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build MacOS Target ${{ matrix.project }}
+    - name: Build MacOS Target
       run: |
-        cd ${{ matrix.project }}
         cargo build --release --target x86_64-apple-darwin
-        mv target/x86_64-apple-darwin/release/${{ matrix.project }} target/x86_64-apple-darwin/release/${{ matrix.project }}.app
+        mv target/x86_64-apple-darwin/release/shell target/x86_64-apple-darwin/release/shell.app
+        mv target/x86_64-apple-darwin/release/simdisk target/x86_64-apple-darwin/release/simdisk.app
 
-    - name: Upload MacOS ${{ matrix.project }}
+    - name: Upload MacOS shell
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ matrix.project }}.app
-        path: ${{ matrix.project }}/target/x86_64-apple-darwin/release/${{ matrix.project }}.app
+        name: shell.app
+        path: target/x86_64-apple-darwin/release/shell.app
+
+    - name: Upload MacOS simdisk
+      uses: actions/upload-artifact@v3
+      with:
+        name: simdisk.app
+        path: target/x86_64-apple-darwin/release/simdisk.app
 
   build-mac-arm:
     runs-on: macos-latest
 
-    strategy:
-      matrix:
-        project: [shell, simdisk]
-
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build ARM MacOS Target ${{ matrix.project }}
+    - name: Build ARM MacOS Target
       run: |
         rustup target add aarch64-apple-darwin
-        cd ${{ matrix.project }}
         cargo build --release --target aarch64-apple-darwin
-        mv target/aarch64-apple-darwin/release/${{ matrix.project }} target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+        mv target/x86_64-apple-darwin/release/shell target/x86_64-apple-darwin/release/shell_arm64.app
+        mv target/x86_64-apple-darwin/release/simdisk target/x86_64-apple-darwin/release/simdisk_arm64.app
 
-    - name: Upload Arm MacOS ${{ matrix.project }}
+    - name: Upload Arm MacOS shell
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ matrix.project }}_arm64.app
-        path: ${{ matrix.project }}/target/aarch64-apple-darwin/release/${{ matrix.project }}_arm64.app
+        name: shell_arm64.app
+        path: target/aarch64-apple-darwin/release/shell_arm64.app
+
+    - name: Upload Arm MacOS simdisk
+      uses: actions/upload-artifact@v3
+      with:
+        name: simdisk_arm64.app
+        path: target/aarch64-apple-darwin/release/simdisk_arm64.app
 
         
   release:

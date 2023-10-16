@@ -5,7 +5,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use block::sync_all_block_cache;
 use inode::FileMode;
-use shell::*;
+use utils::*;
 use simple_fs::SFS;
 
 mod bitmap;
@@ -21,7 +21,7 @@ mod user;
 
 #[macro_use]
 extern crate lazy_static;
-extern crate pretty_env_logger;
+
 #[macro_use]
 extern crate log;
 

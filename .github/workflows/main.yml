@@ -111,15 +111,6 @@ jobs:
         with:
           path: bins
 
-      - name: Add permissions to files
-        run: |
-          find bins -type f -exec chmod +x {} \;
-
-      - name : Upx archive
-        run: |
-          sudo apt install -y upx
-          find bins -type f -exec upx "{}" --best \;
-
       - name: Archive Linux Binaries
         run: |
           zip -j $FILENAME bins/shell/shell bins/simdisk/simdisk
@@ -136,7 +127,7 @@ jobs:
         run: |
           zip -j $FILENAME bins/shell.app/shell.app bins/simdisk.app/simdisk.app
         env:
-          FILENAME: SimpleFS_x86_64--apple_${{env.VERSION}}.zip
+          FILENAME: SimpleFS_x86_64-apple_${{env.VERSION}}.zip
 
       - name: Archive ARM MacOS Binaries
         run: |

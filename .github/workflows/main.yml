@@ -87,8 +87,8 @@ jobs:
       run: |
         rustup target add aarch64-apple-darwin
         cargo build --release --target aarch64-apple-darwin
-        mv target/x86_64-apple-darwin/release/shell target/x86_64-apple-darwin/release/shell_arm64.app
-        mv target/x86_64-apple-darwin/release/simdisk target/x86_64-apple-darwin/release/simdisk_arm64.app
+        mv target/aarch64-apple-darwin/release/shell target/aarch64-apple-darwin/release/shell_arm64.app
+        mv target/aarch64-apple-darwin/release/simdisk target/aarch64-apple-darwin/release/simdisk_arm64.app
 
     - name: Upload Arm MacOS shell
       uses: actions/upload-artifact@v3

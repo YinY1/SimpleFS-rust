@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use crate::{
-    bitmap::{self, alloc_bit, dealloc_data_bit, BitmapType},
+    bitmap::{self, alloc_bit, dealloc_data_bit, BitmapType, BITMAP_MANAGER},
     fs_constants::*,
     inode::Inode,
     simple_fs::SFS,
@@ -55,7 +55,7 @@ impl BlockCacheManager {
 
     /// 将所有块缓存写入磁盘，同时清空缓存
     pub async fn sync_and_clear_cache(&mut self) -> Result<(), Error> {
-        let mut file = None;
+        let mut file: Option<tokio::fs::File> = None;
         for block in self.block_cache.values_mut() {
             if !block.modified {
                 continue;
@@ -83,12 +83,6 @@ impl BlockCacheManager {
         self.block_cache.clear();
         Ok(())
     }
-}
-
-/// 将块读入缓存中
-pub async fn read_block_to_cache(block_id: usize) -> Result<(), Error> {
-    let id = [block_id];
-    read_blocks_to_cache(&id).await
 }
 
 /// 批量将块读入缓存中
@@ -664,6 +658,13 @@ pub enum BlockLevel {
 
 /// 清空块缓存，写入磁盘中
 pub async fn sync_all_block_cache() -> Result<(), Error> {
+    // 将位图缓存入读块缓存中
+    Arc::clone(&BITMAP_MANAGER)
+        .read()
+        .await
+        .cache_to_block()
+        .await?;
+    // 将块缓存写入磁盘
     Arc::clone(&BLOCK_CACHE_MANAGER)
         .write()
         .await

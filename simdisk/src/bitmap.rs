@@ -7,7 +7,10 @@ use std::{
 use tokio::sync::RwLock;
 
 use crate::{
-    block::{clear_blocks, get_blocks_buffers, read_blocks_to_cache, Block, BLOCK_CACHE_MANAGER},
+    block::{
+        clear_blocks, get_block_mut, get_blocks_buffers, read_blocks_to_cache, Block,
+        BLOCK_CACHE_MANAGER,
+    },
     fs_constants::*,
 };
 
@@ -112,12 +115,11 @@ impl BitmapManager {
 
         // 写入inode位图块
         let inode_block_ids = &block_ids[..INODE_BITMAP_NUM];
-        self.write_bitmaps_to_blocks(inode_block_ids, BitmapType::Inode, block_cache);
+        self.write_bitmaps_to_blocks(inode_block_ids, BitmapType::Inode, block_cache)?;
 
         // 写入data位图块
         let data_block_ids = &block_ids[INODE_BITMAP_NUM..];
-        self.write_bitmaps_to_blocks(data_block_ids, BitmapType::Data, block_cache);
-        Ok(())
+        self.write_bitmaps_to_blocks(data_block_ids, BitmapType::Data, block_cache)
     }
 
     /// 将位图缓存写入块缓存
@@ -126,7 +128,7 @@ impl BitmapManager {
         block_ids: &[usize],
         bitmap_type: BitmapType,
         block_cache: &mut HashMap<usize, Block>,
-    ) {
+    ) -> io::Result<()> {
         let (start_block_id, bitmap) = match bitmap_type {
             BitmapType::Inode => (INODE_BITMAP_START_BLOCK, &self.inodes),
             BitmapType::Data => (DATA_BITMAP_START_BLOCK, &self.datas),
@@ -141,11 +143,10 @@ impl BitmapManager {
                 .map(|bitmap| bitmap.into_value())
                 .collect();
 
-            block_cache
-                .get_mut(block_id)
-                .unwrap()
-                .modify_bytes(|bytes| bytes.clone_from_slice(&buffers));
+            let block = get_block_mut(block_id, block_ids, block_cache)?;
+            block.modify_bytes(|bytes| bytes.clone_from_slice(&buffers));
         }
+        Ok(())
     }
 }
 

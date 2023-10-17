@@ -2,7 +2,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Error, ErrorKind, Read, Seek},
+    io::{self, Error, ErrorKind, Read, Seek},
     mem::size_of,
     sync::Arc,
 };
@@ -89,10 +89,17 @@ impl BlockCacheManager {
 pub async fn read_blocks_to_cache(block_id_addrs: &[usize]) -> Result<(), Error> {
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut w = blk.write().await;
-    let mut file = None;
+    read_blocks_to_cache_unblocking(block_id_addrs, &mut w.block_cache)
+}
 
+/// 在已经持有锁的情况下读取缓存（不再加锁）
+fn read_blocks_to_cache_unblocking(
+    block_id_addrs: &[usize],
+    block_cache: &mut HashMap<usize, Block>,
+) -> Result<(), Error> {
+    let mut file = None;
     for block_id in block_id_addrs {
-        if w.block_cache.contains_key(block_id) {
+        if block_cache.contains_key(block_id) {
             continue;
         }
 
@@ -114,7 +121,7 @@ pub async fn read_blocks_to_cache(block_id_addrs: &[usize]) -> Result<(), Error>
                 error!("{}", e);
                 return Err(Error::new(ErrorKind::AddrNotAvailable, e));
             }
-            w.block_cache.insert(*block_id, block);
+            block_cache.insert(*block_id, block);
             trace!("block {} push to cache", block_id);
         }
     }
@@ -137,23 +144,31 @@ pub async fn get_blocks_buffers(
     blocks_args: &[(usize, usize, usize)],
 ) -> Result<Vec<Vec<u8>>, Error> {
     let ids: Vec<_> = blocks_args.iter().map(|(id, _, _)| *id).collect();
-    read_blocks_to_cache(&ids).await?;
-    let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
-    let bcm = blk.read().await;
-    let mut buffers = Vec::new();
-    for (block_id, start, end) in blocks_args {
-        let block = match bcm.block_cache.get(block_id) {
-            Some(block) => block,
-            None => {
-                // 可能会因为他人持有写锁，写完后清空了缓存导致读不到缓存，所以要重读
-                info!("re-read caches");
-                read_blocks_to_cache(&ids).await?;
-                bcm.block_cache.get(block_id).unwrap()
-            }
-        };
-        buffers.push(block.bytes[*start..*end].to_vec());
+    loop {
+        let mut re_read = false;
+        read_blocks_to_cache(&ids).await?;
+        let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
+        let bcm = blk.read().await;
+        let block_cache = &bcm.block_cache;
+        let mut buffers = Vec::new();
+
+        for (block_id, start, end) in blocks_args {
+            let block = match block_cache.get(block_id) {
+                Some(block) => block,
+                None => {
+                    // 可能会因为他人持有写锁，写完后清空了缓存导致读不到缓存，所以要重读
+                    info!("re-read caches when getting block buffer");
+                    re_read = true; //因为上面没有持有写锁，要是在这里直接持写锁读缓存可能会出问题
+                    break;
+                }
+            };
+            buffers.push(block.bytes[*start..*end].to_vec());
+        }
+        if re_read {
+            continue; // 但是直接放弃读锁从头开始读缓存就没问题
+        }
+        return Ok(buffers);
     }
-    Ok(buffers)
 }
 
 /// 将文件内容分组批量写入缓存
@@ -166,8 +181,9 @@ pub async fn write_file_content_to_blocks(
     read_blocks_to_cache(block_ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
+    let block_cache = &mut bcm.block_cache;
     for (i, block_id) in block_ids.iter().enumerate() {
-        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        let block = get_block_mut(block_id, block_ids, block_cache)?;
         let content = contents[i].clone();
         assert!(BLOCK_SIZE >= content.len());
         block.modify_bytes(|bytes_arr| {
@@ -200,10 +216,11 @@ pub async fn write_blocks<T: serde::Serialize>(
     read_blocks_to_cache(&ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
+    let block_cache = &mut bcm.block_cache;
 
     for (object, block_id, start_byte) in object_args {
         trace!("write block{}", *block_id);
-        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        let block = get_block_mut(block_id, &ids, block_cache)?;
         // 将 object 序列化
         match bincode::serialize(*object) {
             Ok(obj_bytes) => {
@@ -288,9 +305,10 @@ pub async fn clear_blocks(block_ids: &[usize]) -> Result<(), Error> {
     read_blocks_to_cache(block_ids).await?;
     let blk = Arc::clone(&BLOCK_CACHE_MANAGER);
     let mut bcm = blk.write().await;
+    let block_cache = &mut bcm.block_cache;
 
     for block_id in block_ids {
-        let block = bcm.block_cache.get_mut(block_id).unwrap();
+        let block = get_block_mut(block_id, block_ids, block_cache)?;
         block.bytes = [0; BLOCK_SIZE];
         block.modified = true;
     }
@@ -641,6 +659,24 @@ pub async fn check_data_and_fix() -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// 从缓存中获取块的可变引用，
+/// 为了避免等待写锁之后缓存被清空导致获取不到，
+/// 当contain为false时直接重新读入块缓存，再尝试获取
+pub fn get_block_mut<'a>(
+    block_id: &usize,
+    block_ids: &'a [usize],
+    block_cache: &'a mut HashMap<usize, Block>,
+) -> io::Result<&'a mut Block> {
+    Ok(if block_cache.contains_key(block_id) {
+        block_cache.get_mut(block_id).unwrap()
+    } else {
+        // 可能会因为他人持有写锁，写完后清空了缓存导致读不到缓存，所以要重读
+        info!("re-read caches when getting block mut");
+        read_blocks_to_cache_unblocking(block_ids, block_cache)?; //因为函数外层会持有写锁，所以这里不能获得锁
+        block_cache.get_mut(block_id).unwrap()
+    })
 }
 
 //延迟加载全局变量 BLOCK_CACHE_MANAGER

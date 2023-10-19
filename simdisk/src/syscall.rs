@@ -3,8 +3,9 @@ use std::{future::Future, io, pin::Pin, sync::Arc};
 use tokio::net::TcpStream;
 
 use crate::{
-    block::sync_all_block_cache,
+    block::{self, sync_all_block_cache, BLOCK_CACHE_MANAGER},
     dirent, file,
+    fs_constants::SYNC_BLOCK_DURATION,
     inode::{FileMode, Inode},
     simple_fs::{self, SFS},
     user::{able_to_modify, UserIdType},
@@ -190,6 +191,29 @@ pub async fn formatting(username: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub async fn set_block_cache_method(method: &str) -> io::Result<()> {
+    let manager = Arc::clone(&BLOCK_CACHE_MANAGER);
+    let mut write_lock = manager.write().await;
+    match method.to_lowercase().as_str() {
+        "instant" => write_lock.cahce_method = block::CacheMethod::Immediately,
+        "exit" => write_lock.cahce_method = block::CacheMethod::OnExit,
+        "tick" => {
+            write_lock.cahce_method = block::CacheMethod::Scheduled;
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(SYNC_BLOCK_DURATION)).await;
+                if !block::is_sync_scheduled().await {
+                    return;
+                }
+                if let Err(e) = sync_all_block_cache().await {
+                    error!("{}", e);
+                }
+            });
+        }
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "no such mode")),
+    }
+    Ok(())
+}
+
 /// 临时移动到指定目录,并执行f的操作，
 /// 如果需要在操作之后更新块缓存，need_sync设置为true
 ///
@@ -212,7 +236,7 @@ where
     // 执行f的操作，失败则f的错误信息
     match f(name.unwrap(), current_inode).await {
         Ok(ok) => {
-            if need_sync {
+            if need_sync && block::is_sync_immediately().await {
                 sync_all_block_cache().await?;
             }
             Ok(ok)

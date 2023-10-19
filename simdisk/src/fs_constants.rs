@@ -51,3 +51,5 @@ pub const NAME_LENGTH_LIMIT: usize = 10;
 pub const EXTENSION_LENGTH_LIMIT: usize = 3;
 
 pub const MAX_FILE_SIZE: usize = BLOCK_SIZE * (DIRECT_BLOCK_NUM + FISRT_MAX + SECOND_MAX); //可表示文件的最大大小（字节）
+
+pub const SYNC_BLOCK_DURATION: u64 = 60;

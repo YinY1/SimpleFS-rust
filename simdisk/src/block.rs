@@ -44,12 +44,14 @@ impl Block {
 
 pub struct BlockCacheManager {
     pub block_cache: HashMap<usize, Block>,
+    pub cahce_method: CacheMethod,
 }
 
 impl BlockCacheManager {
     pub fn new() -> Self {
         Self {
             block_cache: HashMap::new(),
+            cahce_method: CacheMethod::Immediately,
         }
     }
 
@@ -83,6 +85,27 @@ impl BlockCacheManager {
         self.block_cache.clear();
         Ok(())
     }
+}
+
+pub async fn is_sync_scheduled() -> bool {
+    matches!(
+        Arc::clone(&BLOCK_CACHE_MANAGER).read().await.cahce_method,
+        CacheMethod::Scheduled
+    )
+}
+
+pub async fn is_sync_exit() -> bool {
+    matches!(
+        Arc::clone(&BLOCK_CACHE_MANAGER).read().await.cahce_method,
+        CacheMethod::OnExit
+    )
+}
+
+pub async fn is_sync_immediately() -> bool {
+    matches!(
+        Arc::clone(&BLOCK_CACHE_MANAGER).read().await.cahce_method,
+        CacheMethod::Immediately
+    )
 }
 
 /// 批量将块读入缓存中
@@ -692,6 +715,12 @@ pub enum BlockLevel {
     SecondIndirect,
 }
 
+pub enum CacheMethod {
+    Immediately,
+    OnExit,
+    Scheduled,
+}
+
 /// 清空块缓存，写入磁盘中
 pub async fn sync_all_block_cache() -> Result<(), Error> {
     // 将位图缓存入读块缓存中
@@ -708,7 +737,7 @@ pub async fn sync_all_block_cache() -> Result<(), Error> {
         .await?;
     // 重新读取已写入的信息
     Arc::clone(&SFS).write().await.update().await;
-    trace!("sync all blocks ok");
+    info!("sync all blocks ok");
     Ok(())
 }
 

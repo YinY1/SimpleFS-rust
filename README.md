@@ -100,6 +100,10 @@ pub struct DirEntry {//16B(对齐后)
     - 格式化文件系统（清空）
 - help
     - 打印指令列表
+- setcache [method]
+    - setcache instant(默认):在进行写操作后立即写入磁盘
+    - setcache exit：在shell退出时才会写入磁盘
+    - setcache tick：以60s为周期写入磁盘
 - EXIT
     - 退出shell
 - users

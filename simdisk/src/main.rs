@@ -5,8 +5,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 use block::sync_all_block_cache;
 use inode::FileMode;
-use utils::*;
 use simple_fs::SFS;
+use utils::*;
 
 mod bitmap;
 mod block;
@@ -95,7 +95,9 @@ async fn main() -> io::Result<()> {
                 let command = cmd.trim();
                 if command == EXIT_MSG {
                     info!("socket {:?} exit", addr);
-                    sync_all_block_cache().await.unwrap();
+                    if block::is_sync_exit().await {
+                        sync_all_block_cache().await.unwrap();
+                    }
                     return;
                 } else if command == EMPTY_INPUT {
                     continue;
@@ -208,6 +210,9 @@ async fn do_command(
                         .map(|_| None),
                     "cat" => syscall::cat(&absolut_path).await,
                     "del" => syscall::del(username, &absolut_path).await.map(|_| None),
+                    "setcache" => syscall::set_block_cache_method(&commands[1])
+                        .await
+                        .map(|_| None),
                     _ => Err(error_arg()),
                 }
             }

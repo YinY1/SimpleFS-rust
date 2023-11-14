@@ -52,7 +52,7 @@ impl User {
         }
         let info = UserIdGroup {
             gid: 1,
-            uid: self.max_id + 1,
+            uid: self.max_id,
         };
         self.max_id += 1;
         self.info
